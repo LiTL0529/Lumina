@@ -1,0 +1,10 @@
+.container { padding: 28rpx; }
+.hero { background: #0f6e66; color: #fff; padding: 36rpx 28rpx; border-radius: 24rpx; margin-bottom: 24rpx; }
+.badge { font-size: 22rpx; letter-spacing: 3rpx; opacity: 0.85; }
+.headline { font-size: 38rpx; font-weight: 700; margin: 12rpx 0 8rpx; }
+.sub { font-size: 25rpx; line-height: 1.5; opacity: 0.92; }
+.card { background: #fff; border-radius: 24rpx; padding: 28rpx; margin-bottom: 24rpx; }
+.title { font-size: 34rpx; font-weight: 700; margin-bottom: 16rpx; color: #142220; }
+.row { font-size: 27rpx; color: #475c59; margin-bottom: 10rpx; }
+.btn-primary { background: #0f6e66; color: #fff; border-radius: 18rpx; margin-bottom: 18rpx; }
+.btn-outline { background: #fff; color: #0f6e66; border: 2rpx solid #0f6e66; border-radius: 18rpx; }

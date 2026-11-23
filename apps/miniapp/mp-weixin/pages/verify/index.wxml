@@ -1,0 +1,20 @@
+<view class="container">
+  <view class="hero" wx:if="{{result}}">
+    <view class="badge">{{result.authentic ? '✓ OFFICIAL AUTHENTIC' : '✕ 校验未通过'}}</view>
+    <view class="headline">{{result.headline}}</view>
+    <view class="sub">{{result.subMessage || result.message}}</view>
+  </view>
+
+  <view class="card" wx:if="{{result && result.authentic}}">
+    <view class="title">{{result.product.name}}</view>
+    <view class="row">品牌：{{result.product.brandName}} · {{result.product.spec}}</view>
+    <view class="row">批号：{{result.batch.batchNo}}（有效期至 {{result.batch.expDate}}）</view>
+    <view class="row">官方指导价：¥{{result.product.retailPrice}}</view>
+    <view class="row">授权服务商：{{result.channelEndorsement.dealerName}}</view>
+    <view class="row" wx:if="{{result.channelEndorsement.clinicName}}">授权机构：{{result.channelEndorsement.clinicName}}</view>
+    <view class="row">累计查验：第 {{result.verifySeq}} 次</view>
+  </view>
+
+  <button class="btn-primary" bindtap="onScanTap">微信扫一扫 · 验证产品防伪码</button>
+  <button class="btn-outline" bindtap="goWorkbench">外勤销售 / 服务商工作台</button>
+</view>

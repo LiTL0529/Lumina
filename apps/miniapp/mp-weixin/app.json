@@ -1,0 +1,14 @@
+{
+  "pages": [
+    "pages/verify/index",
+    "pages/workbench/index"
+  ],
+  "window": {
+    "backgroundTextStyle": "dark",
+    "navigationBarBackgroundColor": "#102321",
+    "navigationBarTitleText": "Lumina 官方防伪溯源",
+    "navigationBarTextStyle": "white",
+    "backgroundColor": "#F4F6F5"
+  },
+  "sitemapLocation": "sitemap.json"
+}

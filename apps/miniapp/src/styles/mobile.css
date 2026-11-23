@@ -1,0 +1,120 @@
+:root {
+  --m-bg: #f4f6f5;
+  --m-card: #ffffff;
+  --m-primary: #0f6e66;
+  --m-primary-dark: #0a4d47;
+  --m-primary-soft: #e6f4f2;
+  --m-gold: #b8863b;
+  --m-gold-soft: #faf3e5;
+  --m-text: #142220;
+  --m-sub: #546965;
+  --m-muted: #849693;
+  --m-border: #e1e8e6;
+  --m-danger: #c81e1e;
+  --m-warn: #b45309;
+  --m-success: #15803d;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  background: #e9efed;
+  color: var(--m-text);
+  font-family: 'Inter', 'PingFang SC', 'Hiragino Sans GB', -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.phone-frame {
+  max-width: 440px;
+  min-height: 100vh;
+  margin: 0 auto;
+  background: var(--m-bg);
+  box-shadow: 0 0 40px rgba(16, 35, 33, 0.08);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.mono {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.m-card {
+  background: var(--m-card);
+  border: 1px solid var(--m-border);
+  border-radius: 14px;
+  padding: 16px;
+  box-shadow: 0 2px 10px rgba(16, 35, 33, 0.03);
+}
+
+.m-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 12px 16px;
+  border-radius: 10px;
+  border: none;
+  font-size: 14.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s ease, transform 0.1s ease;
+}
+
+.m-btn:active {
+  transform: scale(0.99);
+}
+
+.m-btn-primary {
+  background: var(--m-primary);
+  color: #fff;
+}
+
+.m-btn-outline {
+  background: #fff;
+  color: var(--m-primary);
+  border: 1px solid var(--m-primary);
+}
+
+.m-btn-soft {
+  background: var(--m-primary-soft);
+  color: var(--m-primary);
+}
+
+.m-input,
+.m-select {
+  width: 100%;
+  padding: 11px 12px;
+  border-radius: 9px;
+  border: 1px solid #d1dcd9;
+  background: #fff;
+  font-size: 14px;
+  color: var(--m-text);
+  outline: none;
+}
+
+.m-input:focus,
+.m-select:focus {
+  border-color: var(--m-primary);
+}
+
+.m-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--m-sub);
+  margin-bottom: 5px;
+}
+
+.m-field {
+  margin-bottom: 12px;
+}

@@ -1,0 +1,22 @@
+{
+  "name": "lumina-beauty-platform",
+  "version": "1.0.0",
+  "private": true,
+  "packageManager": "pnpm@12.21.0",
+  "scripts": {
+    "dev:api": "pnpm --filter @lumina/api dev",
+    "dev:admin": "pnpm --filter @lumina/web-admin dev",
+    "dev:miniapp": "pnpm --filter @lumina/miniapp dev",
+    "build": "pnpm --filter @lumina/shared-types build && pnpm --filter @lumina/trace-crypto build && pnpm --filter @lumina/print-templates build && pnpm --filter @lumina/api build && pnpm --filter @lumina/web-admin build && pnpm --filter @lumina/miniapp build",
+    "test": "pnpm --filter @lumina/shared-types test && pnpm --filter @lumina/trace-crypto test && pnpm --filter @lumina/print-templates test && pnpm --filter @lumina/api test",
+    "db:push": "pnpm --filter @lumina/api db:push",
+    "db:seed": "pnpm --filter @lumina/api db:seed",
+    "docker:up": "docker compose -f docker/docker-compose.yml up -d postgres redis",
+    "docker:down": "docker compose -f docker/docker-compose.yml down"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.7"
+  }
+}

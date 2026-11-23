@@ -1,0 +1,611 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// 1. Multi-Tenant Organizations, Warehouses & RBAC Users
+// ============================================================================
+
+model Organization {
+  id           String   @id @default(cuid())
+  type         String   // HQ | DEALER
+  name         String
+  code         String   @unique
+  province     String?
+  city         String?
+  regionCodes  Json     @default("[]") // Authorized province/city names or codes
+  contactName  String?
+  contactPhone String?
+  priceTier    String   @default("STANDARD")
+  supplyFrozen Boolean  @default(false) // Set true on unresolved monthly variance / fleeing
+  freezeReason String?
+  status       String   @default("ACTIVE")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  warehouses      Warehouse[]
+  users           User[]
+  ownedClinics    Clinic[]             @relation("ClinicOwnerOrg")
+  salesOrders     SalesOrder[]         @relation("OrderSellerOrg")
+  buyerOrders     SalesOrder[]         @relation("OrderBuyerOrg")
+  purchaseOrders  PurchaseOrder[]
+  reconciliations MonthlyReconciliation[]
+  rebates         RebateStatement[]
+  alerts          AntiFleeingAlert[]
+}
+
+model Warehouse {
+  id        String   @id @default(cuid())
+  orgId     String
+  org       Organization @relation(fields: [orgId], references: [id])
+  name      String
+  code      String   @unique
+  address   String?
+  isDefault Boolean  @default(false)
+  status    String   @default("ACTIVE")
+  createdAt DateTime @default(now())
+
+  stockBalances  StockBalance[]
+  stockLedgers   StockLedger[]
+  purchaseOrders PurchaseOrder[]
+  salesOrders    SalesOrder[]
+  returnOrders   ReturnOrder[]
+  stockDocs      StockDoc[]
+
+  @@index([orgId])
+}
+
+model User {
+  id           String   @id @default(cuid())
+  orgId        String
+  org          Organization @relation(fields: [orgId], references: [id])
+  roleCode     String   // HQ_ADMIN | HQ_WAREHOUSE | HQ_COMPLIANCE | DEALER_ADMIN | DEALER_WAREHOUSE | SALES_REP
+  username     String   @unique
+  realName     String
+  phone        String?
+  openid       String?  @unique
+  passwordHash String
+  status       String   @default("ACTIVE")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([orgId])
+}
+
+// ============================================================================
+// 2. Product Master Data & Suppliers (Aligned with 生意通 ERP)
+// ============================================================================
+
+model Brand {
+  id        String    @id @default(cuid())
+  name      String    @unique
+  code      String    @unique
+  logoUrl   String?
+  status    String    @default("ACTIVE")
+  createdAt DateTime  @default(now())
+  products  Product[]
+}
+
+model Category {
+  id        String    @id @default(cuid())
+  name      String    @unique
+  sortOrder Int       @default(0)
+  products  Product[]
+}
+
+model Product {
+  id                 String   @id @default(cuid())
+  skuCode            String   @unique
+  barcode            String?  // Generic EAN/69 barcode
+  name               String
+  brandId            String
+  brand              Brand    @relation(fields: [brandId], references: [id])
+  categoryId         String?
+  category           Category? @relation(fields: [categoryId], references: [id])
+  spec               String?  // e.g. 120ml / 5瓶/盒
+  unitName           String   @default("盒")
+  cartonQty          Int      @default(24) // Units per carton
+  retailPrice        Decimal  @db.Decimal(18, 2) // Official MSRP
+  defaultSupplyPrice Decimal  @db.Decimal(18, 2) // Standard supply price
+  costPrice          Decimal  @default(0) @db.Decimal(18, 2)
+  minSupplyDiscount  Decimal  @default(0.35) @db.Decimal(5, 4) // 3.5折供货红线
+  isTraceable        Boolean  @default(true) // Enforce one-item-one-code
+  isCoreKpi          Boolean  @default(true) // Counted in SKU coverage KPI
+  imageUrl           String?
+  customAttrs        Json     @default("{}")
+  status             String   @default("ACTIVE")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  codeBatches   CodeBatch[]
+  traceCodes    TraceCode[]
+  stockBalances StockBalance[]
+  stockLedgers  StockLedger[]
+  purchaseItems PurchaseOrderItem[]
+  salesItems    SalesOrderItem[]
+  returnItems   ReturnOrderItem[]
+
+  @@index([brandId])
+}
+
+model Supplier {
+  id            String          @id @default(cuid())
+  name          String          @unique
+  code          String          @unique
+  contactName   String?
+  contactPhone  String?
+  address       String?
+  payableAmount Decimal         @default(0) @db.Decimal(18, 2)
+  status        String          @default("ACTIVE")
+  createdAt     DateTime        @default(now())
+  purchaseOrders PurchaseOrder[]
+}
+
+// ============================================================================
+// 3. Terminal Clinics & 90-Day / 270-Day Protection Engine
+// ============================================================================
+
+model Clinic {
+  id              String        @id @default(cuid())
+  name            String
+  fingerprint     String        @unique // Normalized dedup fingerprint
+  creditCode      String?
+  province        String?
+  city            String
+  cityCode        String
+  address         String?
+  contactName     String?
+  contactPhone    String?
+  ownerOrgId      String?
+  ownerOrg        Organization? @relation("ClinicOwnerOrg", fields: [ownerOrgId], references: [id])
+  ownerSalesId    String?
+  bindStatus      String        @default("PUBLIC_POOL") // PUBLIC_POOL | PROTECTED_90D | BOUND_ACTIVE
+  reportedAt      DateTime?     // Server UTC timestamp of successful report
+  protectExpireAt DateTime?     // reportedAt + 90 days
+  lastOrderAt     DateTime?     // Reset on every valid outbound; +270d auto unbind
+  arrearsAmount   Decimal       @default(0) @db.Decimal(18, 2)
+  tags            Json          @default("[]")
+  remark          String?
+  status          String        @default("ACTIVE")
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  protectionLogs ClinicProtectionLog[]
+  salesOrders    SalesOrder[]
+  returnOrders   ReturnOrder[]
+
+  @@index([ownerOrgId, bindStatus])
+  @@index([bindStatus, protectExpireAt])
+  @@index([bindStatus, lastOrderAt])
+}
+
+model ClinicProtectionLog {
+  id              String   @id @default(cuid())
+  clinicId        String
+  clinic          Clinic   @relation(fields: [clinicId], references: [id])
+  orgId           String?
+  action          String   // REPORT | UPGRADE_BOUND | RELEASE_90D | RELEASE_270D | MANUAL_TRANSFER
+  operatorId      String?
+  serverTimestamp DateTime @default(now())
+  remark          String?
+
+  @@index([clinicId, serverTimestamp])
+}
+
+// ============================================================================
+// 4. One-Item-One-Code Traceability, Carton-Unit Hierarchy & Anti-Fleeing
+// ============================================================================
+
+model CodeBatch {
+  id          String   @id @default(cuid())
+  batchNo     String   @unique
+  productId   String
+  product     Product  @relation(fields: [productId], references: [id])
+  mfgDate     DateTime
+  expDate     DateTime
+  unitCount   Int
+  cartonCount Int      @default(0)
+  cartonQty   Int      @default(24)
+  createdById String?
+  remark      String?
+  createdAt   DateTime @default(now())
+
+  codes TraceCode[]
+
+  @@index([productId])
+}
+
+model TraceCode {
+  id                 String      @id @default(cuid())
+  codeToken          String      @unique // 16-char Crockford Base32 HMAC token
+  codeLevel          String      // UNIT | CARTON
+  parentId           String?
+  parent             TraceCode?  @relation("CartonChildren", fields: [parentId], references: [id])
+  children           TraceCode[] @relation("CartonChildren")
+  batchId            String
+  batch              CodeBatch   @relation(fields: [batchId], references: [id])
+  productId          String
+  product            Product     @relation(fields: [productId], references: [id])
+  status             String      @default("GENERATED") // GENERATED | IN_HQ_STOCK | IN_TRANSIT_TO_DEALER | IN_DEALER_STOCK | SOLD_TO_CLINIC | CONSUMED | UNPACKED | VOIDED
+  currentOrgId       String?
+  currentWarehouseId String?
+  assignedDealerId   String?     // Which dealer received this code from HQ
+  targetClinicId     String?     // Which terminal clinic received this code
+  firstVerifyAt      DateTime?
+  verifyCount        Int         @default(0)
+  firstVerifyCity    String?
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  events     TraceEvent[]
+  verifyLogs ConsumerVerifyLog[]
+
+  @@index([parentId])
+  @@index([batchId])
+  @@index([currentWarehouseId, productId, status])
+  @@index([assignedDealerId, status])
+}
+
+model TraceEvent {
+  id          String    @id @default(cuid())
+  traceCodeId String
+  traceCode   TraceCode @relation(fields: [traceCodeId], references: [id])
+  eventType   String    // BATCH_GENERATED | CARTON_BOUND | HQ_INBOUND | HQ_OUTBOUND | DEALER_INBOUND | DEALER_OUTBOUND | CARTON_UNPACKED | RETURN_TO_DEALER | RETURN_TO_HQ | CONSUMER_VERIFIED | VOIDED
+  fromOrgId   String?
+  toOrgId     String?
+  clinicId    String?
+  warehouseId String?
+  docType     String?
+  docId       String?
+  docNo       String?
+  operatorId  String?
+  remark      String?
+  occurredAt  DateTime  @default(now())
+
+  @@index([traceCodeId, occurredAt])
+  @@index([docNo])
+}
+
+model ConsumerVerifyLog {
+  id           String    @id @default(cuid())
+  traceCodeId  String
+  traceCode    TraceCode @relation(fields: [traceCodeId], references: [id])
+  ip           String?
+  resolvedCity String?
+  geoCity      String?
+  deviceHash   String?
+  openid       String?
+  verifySeq    Int
+  isAbnormal   Boolean   @default(false)
+  verifiedAt   DateTime  @default(now())
+
+  @@index([traceCodeId, verifiedAt])
+}
+
+model AntiFleeingAlert {
+  id               String        @id @default(cuid())
+  alertType        String        // CROSS_REGION | UNAUTHORIZED_SCAN | HIGH_FREQ_VERIFY | PRICE_BELOW_REDLINE | RETAIL_PRICE_REPORT | RECONCILIATION_VARIANCE
+  severity         String        @default("HIGH") // LOW | MEDIUM | HIGH | CRITICAL
+  orgId            String?
+  org              Organization? @relation(fields: [orgId], references: [id])
+  traceCodeToken   String?
+  docNo            String?
+  title            String
+  detail           String
+  evidenceSnapshot Json          @default("{}")
+  status           String        @default("OPEN") // OPEN | INVESTIGATING | RESOLVED
+  handlerId        String?
+  resolution       String?
+  createdAt        DateTime      @default(now())
+  resolvedAt       DateTime?
+
+  @@index([status, createdAt])
+  @@index([orgId, alertType])
+}
+
+// ============================================================================
+// 5. ERP Orders & Inventory Ledgers (Purchase / Sales / Return / Stock)
+// ============================================================================
+
+model PurchaseOrder {
+  id          String              @id @default(cuid())
+  docNo       String              @unique
+  orgId       String
+  org         Organization        @relation(fields: [orgId], references: [id])
+  supplierId  String
+  supplier    Supplier            @relation(fields: [supplierId], references: [id])
+  warehouseId String
+  warehouse   Warehouse           @relation(fields: [warehouseId], references: [id])
+  bizDate     DateTime            @default(now())
+  status      String              @default("PENDING_INBOUND") // DRAFT | PENDING_INBOUND | PARTIAL_INBOUND | COMPLETED | CANCELLED
+  totalAmount Decimal             @default(0) @db.Decimal(18, 2)
+  paidAmount  Decimal             @default(0) @db.Decimal(18, 2)
+  remark      String?
+  creatorId   String?
+  printCount  Int                 @default(0)
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  items       PurchaseOrderItem[]
+
+  @@index([orgId, bizDate])
+}
+
+model PurchaseOrderItem {
+  id              String        @id @default(cuid())
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  productId       String
+  product         Product       @relation(fields: [productId], references: [id])
+  qty             Int
+  inboundQty      Int           @default(0)
+  unitPrice       Decimal       @db.Decimal(18, 2)
+  discountPercent Decimal       @default(100) @db.Decimal(6, 2)
+  lineAmount      Decimal       @db.Decimal(18, 2)
+  remark          String?
+}
+
+model SalesOrder {
+  id                     String           @id @default(cuid())
+  docNo                  String           @unique
+  orderScene             String           // HQ_TO_DEALER | DEALER_TO_CLINIC
+  sellerOrgId            String
+  sellerOrg              Organization     @relation("OrderSellerOrg", fields: [sellerOrgId], references: [id])
+  buyerOrgId             String?          // Set when HQ_TO_DEALER
+  buyerOrg               Organization?    @relation("OrderBuyerOrg", fields: [buyerOrgId], references: [id])
+  clinicId               String?          // Set when DEALER_TO_CLINIC
+  clinic                 Clinic?          @relation(fields: [clinicId], references: [id])
+  warehouseId            String
+  warehouse              Warehouse        @relation(fields: [warehouseId], references: [id])
+  salesRepId             String?
+  bizDate                DateTime         @default(now())
+  status                 String           @default("PENDING_OUTBOUND") // DRAFT | PENDING_APPROVAL | PENDING_OUTBOUND | PARTIAL_OUTBOUND | COMPLETED | CANCELLED
+  totalRetailAmount      Decimal          @default(0) @db.Decimal(18, 2)
+  subtotalAmount         Decimal          @default(0) @db.Decimal(18, 2)
+  roundingAmount         Decimal          @default(0) @db.Decimal(18, 2) // 抹零
+  otherFee               Decimal          @default(0) @db.Decimal(18, 2) // 运费/其他
+  totalAmount            Decimal          @default(0) @db.Decimal(18, 2)
+  paidAmount             Decimal          @default(0) @db.Decimal(18, 2)
+  compositeDiscountRatio Decimal          @default(1) @db.Decimal(6, 4)
+  redlineStatus          String           @default("PASS") // PASS | BLOCKED | SPECIAL_APPROVED
+  redlineViolations      Json             @default("[]")
+  specialApprovedBy      String?
+  specialApproveReason   String?
+  shippingMethod         String           @default("物流发货")
+  trackingNo             String?
+  remark                 String?
+  creatorId              String?
+  printCount             Int              @default(0)
+  createdAt              DateTime         @default(now())
+  updatedAt              DateTime         @updatedAt
+  items                  SalesOrderItem[]
+
+  @@index([sellerOrgId, bizDate])
+  @@index([buyerOrgId, status])
+  @@index([clinicId])
+}
+
+model SalesOrderItem {
+  id              String     @id @default(cuid())
+  salesOrderId    String
+  salesOrder      SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+  productId       String
+  product         Product    @relation(fields: [productId], references: [id])
+  qty             Int
+  outboundQty     Int        @default(0)
+  retailPrice     Decimal    @db.Decimal(18, 2)
+  unitPrice       Decimal    @db.Decimal(18, 2)
+  discountPercent Decimal    @default(100) @db.Decimal(6, 2)
+  isGift          Boolean    @default(false)
+  lineAmount      Decimal    @db.Decimal(18, 2)
+  remark          String?
+}
+
+model ReturnOrder {
+  id                String            @id @default(cuid())
+  docNo             String            @unique
+  orgId             String
+  warehouseId       String
+  warehouse         Warehouse         @relation(fields: [warehouseId], references: [id])
+  clinicId          String?
+  originalSalesNo   String?
+  bizDate           DateTime          @default(now())
+  status            String            @default("COMPLETED")
+  totalRefundAmount Decimal           @default(0) @db.Decimal(18, 2)
+  remark            String?
+  creatorId         String?
+  createdAt         DateTime          @default(now())
+  clinic            Clinic?           @relation(fields: [clinicId], references: [id])
+  items             ReturnOrderItem[]
+
+  @@index([orgId, bizDate])
+}
+
+model ReturnOrderItem {
+  id            String      @id @default(cuid())
+  returnOrderId String
+  returnOrder   ReturnOrder @relation(fields: [returnOrderId], references: [id], onDelete: Cascade)
+  productId     String
+  product       Product     @relation(fields: [productId], references: [id])
+  qty           Int
+  unitPrice     Decimal     @db.Decimal(18, 2)
+  lineAmount    Decimal     @db.Decimal(18, 2)
+  returnedCodes Json        @default("[]")
+}
+
+model StockDoc {
+  id          String         @id @default(cuid())
+  docNo       String         @unique
+  docType     String         // HQ_INBOUND | HQ_OUTBOUND | DEALER_INBOUND | DEALER_OUTBOUND | RETURN_IN | STOCKTAKE
+  warehouseId String
+  warehouse   Warehouse      @relation(fields: [warehouseId], references: [id])
+  refDocNo    String?
+  operatorId  String?
+  remark      String?
+  createdAt   DateTime       @default(now())
+  items       StockDocItem[]
+
+  @@index([warehouseId, createdAt])
+}
+
+model StockDocItem {
+  id         String   @id @default(cuid())
+  stockDocId String
+  stockDoc   StockDoc @relation(fields: [stockDocId], references: [id], onDelete: Cascade)
+  productId  String
+  qty        Int
+  codeTokens Json     @default("[]")
+}
+
+model StockBalance {
+  id          String    @id @default(cuid())
+  warehouseId String
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+  productId   String
+  product     Product   @relation(fields: [productId], references: [id])
+  qty         Int       @default(0)
+  warnMinQty  Int       @default(10)
+  version     Int       @default(0)
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([warehouseId, productId])
+}
+
+model StockLedger {
+  id          String    @id @default(cuid())
+  warehouseId String
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+  productId   String
+  product     Product   @relation(fields: [productId], references: [id])
+  beforeQty   Int
+  deltaQty    Int
+  afterQty    Int
+  docType     String
+  docNo       String
+  operatorId  String?
+  createdAt   DateTime  @default(now())
+
+  @@index([warehouseId, productId, createdAt])
+}
+
+// ============================================================================
+// 6. Monthly Flow Reconciliation, KPI Rebates, Print Templates & Rules
+// ============================================================================
+
+model MonthlyReconciliation {
+  id               String                      @id @default(cuid())
+  periodMonth      String                      // YYYY-MM
+  orgId            String
+  org              Organization                @relation(fields: [orgId], references: [id])
+  status           String                      @default("PENDING_SUBMIT") // PENDING_SUBMIT | SUBMITTED | MATCHED | VARIANCE_FLAGGED | RESOLVED
+  totalTheoretical Int                         @default(0)
+  totalActual      Int                         @default(0)
+  totalVariance    Int                         @default(0)
+  dealerNote       String?
+  hqAuditAction    String?                     // PASS | RECOUNT | PRICE_ADJUST | FREEZE_SUPPLY
+  hqAuditNote      String?
+  submittedAt      DateTime?
+  auditedAt        DateTime?
+  createdAt        DateTime                    @default(now())
+  items            MonthlyReconciliationItem[]
+
+  @@unique([periodMonth, orgId])
+}
+
+model MonthlyReconciliationItem {
+  id               String                @id @default(cuid())
+  reconciliationId String
+  reconciliation   MonthlyReconciliation @relation(fields: [reconciliationId], references: [id], onDelete: Cascade)
+  productId        String
+  productName      String
+  skuCode          String
+  openingQty       Int
+  inboundQty       Int
+  outboundQty      Int
+  theoreticalQty   Int
+  actualQty        Int?
+  varianceQty      Int                   @default(0)
+  explanation      String?
+}
+
+model RebateStatement {
+  id                   String       @id @default(cuid())
+  periodMonth          String       // YYYY-MM
+  orgId                String
+  org                  Organization @relation(fields: [orgId], references: [id])
+  paymentAmount        Decimal      @db.Decimal(18, 2)
+  newActiveClinics     Int
+  activeCoreSkuCount   Int
+  totalCoreSkuCount    Int
+  skuCoverageRate      Decimal      @db.Decimal(6, 4)
+  baseRebateRate       Decimal      @db.Decimal(6, 4)
+  bonusRebateRate      Decimal      @db.Decimal(6, 4)
+  penaltyDeduction     Decimal      @default(0) @db.Decimal(18, 2)
+  finalRebateAmount    Decimal      @db.Decimal(18, 2)
+  auditSnapshot        Json         @default("{}")
+  status               String       @default("CALCULATED") // CALCULATED | CONFIRMED | SETTLED
+  createdAt            DateTime     @default(now())
+
+  @@unique([periodMonth, orgId])
+}
+
+model PrintTemplate {
+  id             String   @id @default(cuid())
+  docType        String   // SALES_OUTBOUND | PURCHASE_INBOUND | RETURN_ORDER | TRACE_LABEL
+  paperType      String   // 241x140 | 241x93 | A4 | 50x30
+  name           String
+  isDefault      Boolean  @default(false)
+  visibleColumns Json     @default("[]")
+  systemVars     Json     @default("[]")
+  hiprintJson    Json     @default("{}")
+  updatedAt      DateTime @updatedAt
+}
+
+model SystemRuleConfig {
+  id                      String   @id @default("default")
+  clinicProtectDays       Int      @default(90)
+  clinicUnbindDays        Int      @default(270)
+  unbindWarnDaysBefore    Int      @default(30)
+  defaultMinSupplyRatio   Decimal  @default(0.35) @db.Decimal(5, 4)
+  defaultMinRetailRatio   Decimal  @default(0.85) @db.Decimal(5, 4)
+  highFreqVerifyThreshold Int      @default(5)
+  allowSpecialPriceApprove Boolean @default(true)
+  verifyBaseUrl           String   @default("http://localhost:5174/v")
+  updatedAt               DateTime @updatedAt
+}
+
+// Phase 2 Reserved Financial Accounts & Ledgers (Zero-migration upgrade path)
+model FinanceAccount {
+  id             String          @id @default(cuid())
+  orgId          String
+  name           String
+  accountType    String          @default("BANK") // BANK | WECHAT | ALIPAY | CASH
+  balance        Decimal         @default(0) @db.Decimal(18, 2)
+  isDefault      Boolean         @default(false)
+  createdAt      DateTime        @default(now())
+  ledgers        FinanceLedger[]
+
+  @@index([orgId])
+}
+
+model FinanceLedger {
+  id          String         @id @default(cuid())
+  orgId       String
+  accountId   String
+  account     FinanceAccount @relation(fields: [accountId], references: [id])
+  category    String         // SALES_INCOME | PURCHASE_EXPENSE | TRANSFER | ADJUSTMENT
+  direction   String         // IN | OUT
+  amount      Decimal        @db.Decimal(18, 2)
+  afterBalance Decimal       @db.Decimal(18, 2)
+  counterparty String?
+  docNo       String?
+  operatorId  String?
+  remark      String?
+  bizTime     DateTime       @default(now())
+
+  @@index([orgId, bizTime])
+}
