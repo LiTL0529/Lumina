@@ -36,15 +36,13 @@ beauty/
 ## 快速启动
 
 ```bash
-# 1. 复制环境变量并启动 PostgreSQL 16 + Redis 7
+# 1. 复制环境变量并启动 PostgreSQL 16 + Redis 7（需要 Node 22 + pnpm + Docker）
 cp .env.example .env && cp .env.example apps/api/.env
 pnpm docker:up
 
-# 2. 安装依赖、构建共享包、初始化数据库与演示数据
+# 2. 一键安装依赖、生成 Prisma Client、构建全量包并灌入演示数据
 pnpm install
-pnpm build
-pnpm db:push
-pnpm db:seed
+pnpm setup
 
 # 3. 运行全量自动化单元测试与端到端业务闭环测试
 pnpm test
