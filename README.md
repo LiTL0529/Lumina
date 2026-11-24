@@ -36,22 +36,37 @@ beauty/
 ## 快速启动
 
 ```bash
-# 1. 复制环境变量并启动 PostgreSQL 16 + Redis 7（需要 Node 22 + pnpm + Docker）
+# 1. 复制环境变量并启动 PostgreSQL 16 + Redis 7
 cp .env.example .env && cp .env.example apps/api/.env
 pnpm docker:up
 
-# 2. 一键安装依赖、生成 Prisma Client、构建全量包并灌入演示数据
+# 2. 安装依赖、构建共享包、初始化数据库与演示数据
 pnpm install
-pnpm setup
+pnpm build
+pnpm db:push
+pnpm db:seed
 
 # 3. 运行全量自动化单元测试与端到端业务闭环测试
 pnpm test
 
-# 4. 启动服务（三个终端或后台进程）
+# 4. 启动本地开发服务（三个终端或后台进程）
 pnpm dev:api       # 后端 API: http://localhost:3100/api/v1
 pnpm dev:admin     # PC 仓管与总控端: http://localhost:5173
 pnpm dev:miniapp   # 手机 C端验真(/v/:token) & 销售工作台(/m/workbench): http://localhost:5174
 ```
+
+## 生产云服务器一键部署（Docker Compose）
+
+支持任意 Linux 云服务器（2核 4G 起，自动拉取代码、生成随机强密钥、构建前后端容器、同步数据库并初始化演示数据，端口 80 若被占用自动切换 8088）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LiTL0529/beauty/main/scripts/deploy.sh | bash
+```
+
+部署完成后通过单一公网入口访问全部三端：
+- PC 品牌总控 & 仓管端：`http://<服务器IP>/`
+- C 端扫码防伪验真页：`http://<服务器IP>/v`
+- 外勤销售移动工作台：`http://<服务器IP>/m/workbench`
 
 ### 默认演示账号（密码均为 `123456`）
 

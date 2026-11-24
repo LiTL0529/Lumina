@@ -86,8 +86,10 @@ const liveOrderBanner = ref('');
 let socket: Socket | null = null;
 
 const mobileVerifyDemoUrl = computed(() => {
-  const host = window.location.hostname;
-  return `http://${host}:5174/m/workbench`;
+  if (import.meta.env.DEV) {
+    return `http://${window.location.hostname}:5174/m/workbench`;
+  }
+  return `${window.location.origin}/m/workbench`;
 });
 
 const navItems = [

@@ -1,0 +1,68 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: lumina-prod-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-lumina}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lumina_secret_2026}
+      POSTGRES_DB: ${POSTGRES_DB:-lumina_beauty}
+      TZ: Asia/Shanghai
+    volumes:
+      - lumina_prod_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-lumina} -d ${POSTGRES_DB:-lumina_beauty}"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  redis:
+    image: redis:7-alpine
+    container_name: lumina-prod-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - lumina_prod_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+    container_name: lumina-prod-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      API_PORT: 3100
+      DATABASE_URL: postgresql://${POSTGRES_USER:-lumina}:${POSTGRES_PASSWORD:-lumina_secret_2026}@postgres:5432/${POSTGRES_DB:-lumina_beauty}?schema=public
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_SECRET: ${JWT_SECRET:-lumina_prod_jwt_change_me_2026}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
+      TRACE_HMAC_SECRET: ${TRACE_HMAC_SECRET:-lumina_prod_hmac_change_me_2026}
+      VERIFY_BASE_URL: ${VERIFY_BASE_URL:-http://39.106.59.4/v}
+      SEED_ON_BOOT: ${SEED_ON_BOOT:-true}
+      TZ: Asia/Shanghai
+
+  web:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.web
+    container_name: lumina-prod-web
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "${WEB_PORT:-80}:80"
+
+volumes:
+  lumina_prod_pg_data:
+  lumina_prod_redis_data:

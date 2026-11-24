@@ -1,0 +1,45 @@
+FROM node:22-alpine AS builder
+
+RUN apk add --no-cache openssl
+RUN npm install -g pnpm@12.21.0
+
+WORKDIR /app
+
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml tsconfig.base.json ./
+COPY packages/shared-types/package.json packages/shared-types/
+COPY packages/trace-crypto/package.json packages/trace-crypto/
+COPY packages/print-templates/package.json packages/print-templates/
+COPY apps/api/package.json apps/api/
+
+RUN pnpm install --frozen-lockfile --filter @lumina/shared-types... --filter @lumina/trace-crypto... --filter @lumina/print-templates... --filter @lumina/api...
+
+COPY packages ./packages
+COPY apps/api ./apps/api
+
+RUN pnpm --filter @lumina/shared-types build \
+  && pnpm --filter @lumina/trace-crypto build \
+  && pnpm --filter @lumina/print-templates build \
+  && pnpm --filter @lumina/api db:generate \
+  && pnpm --filter @lumina/api build
+
+FROM node:22-alpine AS runner
+
+RUN apk add --no-cache openssl
+RUN npm install -g pnpm@12.21.0
+
+WORKDIR /app
+ENV NODE_ENV=production
+
+COPY --from=builder /app/package.json /app/pnpm-workspace.yaml /app/pnpm-lock.yaml ./
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/packages ./packages
+COPY --from=builder /app/apps/api/package.json ./apps/api/package.json
+COPY --from=builder /app/apps/api/node_modules ./apps/api/node_modules
+COPY --from=builder /app/apps/api/dist ./apps/api/dist
+COPY --from=builder /app/apps/api/prisma ./apps/api/prisma
+
+COPY docker/api-entrypoint.sh /usr/local/bin/api-entrypoint.sh
+RUN chmod +x /usr/local/bin/api-entrypoint.sh
+
+EXPOSE 3100
+ENTRYPOINT ["/usr/local/bin/api-entrypoint.sh"]

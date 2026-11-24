@@ -1,0 +1,30 @@
+FROM node:22-alpine AS builder
+
+RUN npm install -g pnpm@12.21.0
+WORKDIR /app
+
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml tsconfig.base.json ./
+COPY packages/shared-types/package.json packages/shared-types/
+COPY packages/print-templates/package.json packages/print-templates/
+COPY apps/web-admin/package.json apps/web-admin/
+COPY apps/miniapp/package.json apps/miniapp/
+
+RUN pnpm install --frozen-lockfile --filter @lumina/shared-types... --filter @lumina/print-templates... --filter @lumina/web-admin... --filter @lumina/miniapp...
+
+COPY packages ./packages
+COPY apps/web-admin ./apps/web-admin
+COPY apps/miniapp ./apps/miniapp
+
+RUN pnpm --filter @lumina/shared-types build \
+  && pnpm --filter @lumina/print-templates build \
+  && pnpm --filter @lumina/web-admin build \
+  && pnpm --filter @lumina/miniapp build
+
+FROM nginx:1.27-alpine AS runner
+
+COPY docker/nginx/prod.conf /etc/nginx/conf.d/default.conf
+COPY --from=builder /app/apps/web-admin/dist /usr/share/nginx/web-admin
+COPY --from=builder /app/apps/miniapp/dist /usr/share/nginx/miniapp
+
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]

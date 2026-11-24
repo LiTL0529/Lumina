@@ -3,6 +3,10 @@ import vue from '@vitejs/plugin-vue';
 
 export default defineConfig({
   plugins: [vue()],
+  build: {
+    // Distinct assets dir so web-admin (/assets) and miniapp (/m-assets) share one Nginx origin cleanly
+    assetsDir: 'm-assets',
+  },
   server: {
     host: '0.0.0.0',
     port: 5174,

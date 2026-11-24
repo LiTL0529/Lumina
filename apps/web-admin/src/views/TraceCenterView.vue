@@ -318,16 +318,22 @@ async function downloadCsv(batchId: string, batchNo: string) {
   URL.revokeObjectURL(url);
 }
 
+function getVerifyBase() {
+  if (import.meta.env.DEV) {
+    return `http://${window.location.hostname}:5174/v`;
+  }
+  return `${window.location.origin}/v`;
+}
+
 async function openQrPreview(row: any) {
-  qrTarget.value = row;
-  const hostUrl = `http://${window.location.hostname}:5174/v/${row.codeToken}`;
+  const hostUrl = `${getVerifyBase()}/${row.codeToken}`;
   qrTarget.value = { ...row, verifyUrl: hostUrl };
   qrDataUrl.value = await QRCode.toDataURL(hostUrl, { width: 220, margin: 1 });
   qrDialog.value = true;
 }
 
 function openConsumerVerify(token: string) {
-  window.open(`http://${window.location.hostname}:5174/v/${token}`, '_blank');
+  window.open(`${getVerifyBase()}/${token}`, '_blank');
 }
 
 function copyToken(token: string) {
