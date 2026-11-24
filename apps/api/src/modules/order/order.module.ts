@@ -164,6 +164,75 @@ export class OrderService {
     });
   }
 
+  /**
+   * 出库码归属：该单出库时实际绑定到客户（服务商/机构）名下的防伪码清单。
+   * 客户端的“出库码记录到该代理商名下”即由此接口取证。
+   */
+  async listOrderCodes(user: AuthUser, orderId: string) {
+    const order = await this.prisma.salesOrder.findUnique({
+      where: { id: orderId },
+      include: {
+        buyerOrg: { select: { id: true, name: true, code: true } },
+        clinic: { select: { id: true, name: true, city: true } },
+      },
+    });
+    if (!order) throw new NotFoundException('订单不存在');
+    if (user.orgType !== 'HQ' && order.sellerOrgId !== user.orgId && order.buyerOrgId !== user.orgId) {
+      throw new ForbiddenException('无权查看该订单的出库码');
+    }
+
+    const events = await this.prisma.traceEvent.findMany({
+      where: {
+        eventType: { in: [TraceEventType.HQ_OUTBOUND, TraceEventType.DEALER_OUTBOUND] },
+        // 新单据写 docId；历史单据只留了单号，按单号兜底匹配
+        OR: [{ docId: orderId }, { docId: null, docNo: order.docNo }],
+      },
+      include: {
+        traceCode: {
+          select: {
+            codeToken: true,
+            codeLevel: true,
+            status: true,
+            verifyCount: true,
+            firstVerifyAt: true,
+            product: { select: { name: true, skuCode: true } },
+          },
+        },
+      },
+      orderBy: { occurredAt: 'asc' },
+    });
+
+    const codes = events.map((e) => ({
+      token: e.traceCode.codeToken,
+      codeLevel: e.traceCode.codeLevel,
+      status: e.traceCode.status,
+      productName: e.traceCode.product.name,
+      skuCode: e.traceCode.product.skuCode,
+      verifyCount: e.traceCode.verifyCount,
+      firstVerifyAt: e.traceCode.firstVerifyAt,
+      occurredAt: e.occurredAt,
+    }));
+
+    return {
+      order: {
+        id: order.id,
+        docNo: order.docNo,
+        status: order.status,
+        orderScene: order.orderScene,
+        bizDate: order.bizDate,
+        ownerName: order.buyerOrg?.name || order.clinic?.name || '',
+        ownerCode: order.buyerOrg?.code || '',
+        ownerType: order.orderScene === 'HQ_TO_DEALER' ? 'DEALER' : 'CLINIC',
+      },
+      codes,
+      summary: {
+        totalCodes: codes.length,
+        cartonCodes: codes.filter((c) => c.codeLevel === TraceCodeLevel.CARTON).length,
+        unitCodes: codes.filter((c) => c.codeLevel === TraceCodeLevel.UNIT).length,
+      },
+    };
+  }
+
   async createSalesOrder(
     user: AuthUser,
     body: {
@@ -595,6 +664,11 @@ export class OrderController {
     @Query('scene') scene?: string,
   ) {
     return this.orderService.listSalesOrders(user, { status, scene });
+  }
+
+  @Get('sales-orders/:id/codes')
+  orderCodes(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.orderService.listOrderCodes(user, id);
   }
 
   @Post('sales-orders')

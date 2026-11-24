@@ -1,42 +1,46 @@
 <template>
   <el-dialog
     :model-value="modelValue"
-    title="针式套打 / 溯源出库单打印预览"
-    width="960px"
+    width="1000px"
     top="4vh"
+    class="print-dialog"
+    :show-close="true"
     @close="emit('update:modelValue', false)"
   >
-    <div v-if="loading" style="padding: 40px; text-align: center; color: var(--text-muted)">
-      正在加载打印模板与溯源码明细...
-    </div>
+    <template #header>
+      <div class="pd-head">
+        <div>
+          <div class="pd-kicker">针式套打 · 出库联单</div>
+          <div class="pd-title">打印预览</div>
+        </div>
+        <div class="pd-controls">
+          <el-select v-model="selectedTemplateId" size="default" style="width: 280px">
+            <el-option v-for="t in payload?.templates || []" :key="t.id" :label="t.name" :value="t.id" />
+          </el-select>
+          <el-input-number v-model="copies" :min="1" :max="5" size="default" controls-position="right" style="width: 100px" />
+          <span class="pd-copies">份</span>
+        </div>
+      </div>
+    </template>
+
+    <div v-if="loading" class="pd-loading">正在加载模板与溯源码明细…</div>
+
     <template v-else-if="payload">
-      <div class="print-toolbar">
-        <div class="toolbar-left">
-          <el-select v-model="selectedTemplateId" style="width: 300px" size="default">
-            <el-option
-              v-for="t in payload.templates"
-              :key="t.id"
-              :label="t.name"
-              :value="t.id"
-            />
-          </el-select>
-          <el-input-number v-model="copies" :min="1" :max="5" size="default" style="width: 110px" />
-          <span style="font-size: 12px; color: var(--text-secondary)">份</span>
-        </div>
-        <div class="toolbar-right">
-          <el-tag :type="bridgeConnected ? 'success' : 'info'" effect="light">
-            {{ bridgeConnected ? `本地打印桥已连 (${printers.length} 台)` : '本地 electron-hiprint 未连接（可使用浏览器打印）' }}
-          </el-tag>
-          <el-select
-            v-if="bridgeConnected && printers.length"
-            v-model="selectedPrinter"
-            size="small"
-            style="width: 180px"
-            placeholder="选择针式打印机"
-          >
-            <el-option v-for="p in printers" :key="p.name" :label="p.name" :value="p.name" />
-          </el-select>
-        </div>
+      <div class="pd-status">
+        <span class="bridge" :class="bridgeConnected ? 'on' : 'off'">
+          <span class="bridge-dot" />
+          {{ bridgeConnected ? `本地打印桥已连接 · ${printers.length} 台设备` : '未连接本地打印桥，可使用浏览器打印' }}
+        </span>
+        <el-select
+          v-if="bridgeConnected && printers.length"
+          v-model="selectedPrinter"
+          size="small"
+          style="width: 200px"
+          placeholder="选择针式打印机"
+        >
+          <el-option v-for="p in printers" :key="p.name" :label="p.name" :value="p.name" />
+        </el-select>
+        <span class="paper-info">纸张 {{ activeTemplate?.paperType }}</span>
       </div>
 
       <div class="preview-stage">
@@ -111,17 +115,18 @@
           </div>
         </div>
       </div>
+
+      <p class="pd-tip">
+        多联针式纸（241×140 / 241×93mm）建议用本地打印桥静默直打，避免浏览器缩放造成走纸偏移；没有打印桥也能用浏览器打印走系统驱动。
+      </p>
     </template>
 
     <template #footer>
-      <div style="display: flex; justify-content: space-between; align-items: center; width: 100%">
-        <span style="font-size: 12px; color: var(--text-muted)">
-          提示：针式三联纸（241×140 / 241×93mm）推荐使用 electron-hiprint 静默打印避免走纸偏移
-        </span>
-        <div style="display: flex; gap: 10px">
-          <el-button @click="emit('update:modelValue', false)">关闭</el-button>
+      <div class="pd-foot">
+        <el-button @click="emit('update:modelValue', false)">关闭</el-button>
+        <div class="pd-foot-right">
           <el-button v-if="bridgeConnected" type="primary" @click="doSilentPrint">
-            静默直打针式机 ({{ copies }} 份)
+            静默直打 {{ copies }} 份
           </el-button>
           <el-button :type="bridgeConnected ? 'default' : 'primary'" @click="doBrowserPrint">
             浏览器打印 / 导出 PDF
@@ -209,7 +214,7 @@ const sheetStyle = computed(() => {
   const pt = activeTemplate.value?.paperType;
   if (pt === '241x93') return { width: '780px', minHeight: '340px' };
   if (pt === 'A4') return { width: '760px', minHeight: '620px' };
-  return { width: '780px', minHeight: '480px' };
+  return { width: '780px', minHeight: '470px' };
 });
 
 const hasCol = (k: string) => activeTemplate.value?.visibleColumns?.includes(k) ?? true;
@@ -225,10 +230,10 @@ async function doSilentPrint() {
   });
   if (ok) {
     await api.post(`/sales-orders/${props.orderId}/print-log`);
-    ElMessage.success(`已向本地针式打印机发送 ${copies.value} 份静默打印任务`);
+    ElMessage.success(`已发送 ${copies.value} 份到针式打印机`);
     emit('printed');
   } else {
-    ElMessage.warning('本地打印服务未就绪，已切换浏览器打印');
+    ElMessage.warning('本地打印服务未就绪，改用浏览器打印');
     await doBrowserPrint();
   }
 }
@@ -243,37 +248,94 @@ async function doBrowserPrint() {
 </script>
 
 <style scoped>
-.print-toolbar {
+.pd-head {
   display: flex;
+  align-items: flex-end;
   justify-content: space-between;
-  align-items: center;
-  gap: 12px;
+  gap: 16px;
   flex-wrap: wrap;
-  margin-bottom: 14px;
+  padding-right: 28px;
 }
-.toolbar-left,
-.toolbar-right {
+.pd-kicker {
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  color: var(--ink-3);
+}
+.pd-title {
+  font-size: 17px;
+  font-weight: 650;
+  margin-top: 3px;
+}
+.pd-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pd-copies {
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.pd-loading {
+  padding: 60px;
+  text-align: center;
+  color: var(--ink-3);
+  font-size: 13px;
+}
+.pd-status {
   display: flex;
   align-items: center;
   gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-2);
+  margin-bottom: 12px;
+  flex-wrap: wrap;
 }
+.bridge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--ink-2);
+}
+.bridge-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink-3);
+}
+.bridge.on .bridge-dot {
+  background: var(--jade);
+  box-shadow: 0 0 0 3px rgba(47, 107, 69, 0.14);
+}
+.paper-info {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-3);
+}
+
 .preview-stage {
-  background: #e6ecea;
-  padding: 20px;
+  background: #e8e5db;
+  padding: 24px;
   border-radius: 8px;
   overflow-x: auto;
   display: flex;
   justify-content: center;
+  border: 1px solid var(--line);
 }
+
 .paper-sheet {
   background: #fff;
   color: #111;
   padding: 22px 26px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
-  border: 1px solid #d1d5db;
+  box-shadow: 0 10px 26px rgba(23, 33, 31, 0.14);
+  border: 1px solid #d3cec1;
   display: flex;
   flex-direction: column;
   position: relative;
+  font-family: 'Songti SC', 'SimSun', var(--font-ui);
 }
 .paper-sheet.needle-paper {
   padding-left: 36px;
@@ -344,5 +406,20 @@ async function doBrowserPrint() {
   font-size: 11px;
   color: #444;
   margin-top: 10px;
+}
+.pd-tip {
+  font-size: 11.5px;
+  color: var(--ink-3);
+  line-height: 1.7;
+  margin: 12px 0 0;
+}
+.pd-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.pd-foot-right {
+  display: flex;
+  gap: 8px;
 }
 </style>

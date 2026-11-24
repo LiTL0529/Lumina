@@ -1,57 +1,87 @@
 <template>
   <div class="admin-shell">
-    <aside class="sidebar">
-      <div class="brand-header">
-        <div class="brand-mark">L</div>
-        <div>
-          <div class="brand-name">LUMINA</div>
-          <div class="brand-sub">供销溯源 · 轻量化 ERP</div>
+    <aside class="rail" :class="{ open: railOpen }">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">
+          <span></span><span></span><span></span><span></span>
+        </div>
+        <div class="brand-copy">
+          <div class="brand-word">LUMINA</div>
+          <div class="brand-sub">供销溯源 · 渠道执行</div>
         </div>
       </div>
 
-      <nav class="nav-list">
-        <router-link
-          v-for="item in navItems"
-          :key="item.path"
-          :to="item.path"
-          class="nav-item"
-          :class="{ active: route.path === item.path }"
-        >
-          <el-icon><component :is="item.icon" /></el-icon>
-          <span>{{ item.label }}</span>
-        </router-link>
+      <nav class="rail-nav">
+        <div v-for="group in navGroups" :key="group.label" class="nav-group">
+          <div class="nav-label">{{ group.label }}</div>
+          <router-link
+            v-for="item in group.items"
+            :key="item.path"
+            :to="item.path"
+            class="nav-item"
+            :class="{ active: isActive(item.path) }"
+          >
+            <el-icon class="nav-icon"><component :is="item.icon" /></el-icon>
+            <span class="nav-text">{{ item.label }}</span>
+          </router-link>
+        </div>
       </nav>
 
-      <div class="sidebar-footer">
-        <a
-          :href="mobileVerifyDemoUrl"
-          target="_blank"
-          rel="noopener"
-          class="mobile-entry-link"
-        >
+      <div class="rail-footer">
+        <a :href="mobileEntryUrl" target="_blank" rel="noopener" class="mobile-entry">
           <el-icon><Iphone /></el-icon>
-          <span>打开手机销售 / C端验真</span>
+          <span>手机端 · 销售工作台 / 验真</span>
+          <el-icon class="entry-arrow"><TopRight /></el-icon>
         </a>
-        <div class="org-pill">
-          <div class="org-pill-role">{{ roleLabel }}</div>
-          <div class="org-pill-name">{{ auth.user?.orgName }}</div>
+        <div class="org-card">
+          <div class="org-role">{{ roleLabel }}</div>
+          <div class="org-name" :title="auth.user?.orgName">{{ auth.user?.orgName }}</div>
         </div>
       </div>
     </aside>
 
+    <div v-if="railOpen" class="rail-scrim" @click="railOpen = false" />
+
     <div class="main-area">
       <header class="topbar">
         <div class="topbar-left">
-          <span class="env-badge">{{ auth.isHQ ? '品牌总控视角' : '服务商独立仓视角' }}</span>
-          <span v-if="liveOrderBanner" class="live-alert-pill" @click="router.push('/sales')">
-            新订单提醒：{{ liveOrderBanner }}
-          </span>
+          <button class="rail-toggle" type="button" aria-label="打开导航" @click="railOpen = !railOpen">
+            <el-icon><Expand /></el-icon>
+          </button>
+          <div class="crumb">
+            <span class="crumb-parent">{{ currentGroup }}</span>
+            <span class="crumb-slash">/</span>
+            <span class="crumb-now">{{ currentTitle }}</span>
+          </div>
         </div>
+
+        <form class="global-scan" @submit.prevent="jumpToTrace">
+          <el-icon class="gs-icon"><Aim /></el-icon>
+          <input
+            ref="scanRef"
+            v-model="globalCode"
+            class="gs-input mono"
+            placeholder="扫码或输入防伪码，追踪这一盒的去向"
+            inputmode="text"
+            autocomplete="off"
+          />
+          <kbd class="gs-kbd">{{ isMac ? '⌘' : 'Ctrl' }} K</kbd>
+        </form>
+
         <div class="topbar-right">
-          <span class="user-label">{{ auth.user?.realName }}</span>
-          <el-button size="small" plain @click="handleLogout">切换账号</el-button>
+          <span class="env-chip" :class="auth.isHQ ? 'hq' : 'dealer'">
+            {{ auth.isHQ ? '品牌总控' : '服务商独立仓' }}
+          </span>
+          <span class="user-name">{{ auth.user?.realName }}</span>
+          <button class="text-btn" type="button" @click="handleLogout">切换账号</button>
         </div>
       </header>
+
+      <div v-if="liveOrderBanner" class="live-banner" @click="router.push('/sales')">
+        <span class="live-dot" />
+        <span class="live-text">仓库收到新订单：{{ liveOrderBanner }}</span>
+        <span class="live-go">去扫码出库</span>
+      </div>
 
       <main class="content-scroll">
         <router-view />
@@ -68,13 +98,16 @@ import { ElNotification } from 'element-plus';
 import {
   Odometer,
   FullScreen,
-  ShoppingCart,
+  Download,
   Sell,
   Box,
   OfficeBuilding,
   DataAnalysis,
   Setting,
   Iphone,
+  Aim,
+  Expand,
+  TopRight,
 } from '@element-plus/icons-vue';
 import { useAuthStore } from '../stores/auth';
 import { playScanBeep, speakWarehouseVoice } from '../composables/useBarcodeScanner';
@@ -83,25 +116,62 @@ const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
 const liveOrderBanner = ref('');
+const globalCode = ref('');
+const scanRef = ref<HTMLInputElement | null>(null);
+const railOpen = ref(false);
 let socket: Socket | null = null;
 
-const mobileVerifyDemoUrl = computed(() => {
+const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+
+const mobileEntryUrl = computed(() => {
   if (import.meta.env.DEV) {
     return `http://${window.location.hostname}:5174/m/workbench`;
   }
   return `${window.location.origin}/m/workbench`;
 });
 
-const navItems = [
-  { path: '/', label: '总控工作台', icon: Odometer },
-  { path: '/trace', label: '一物一码溯源', icon: FullScreen },
-  { path: '/purchase', label: '采购与扫码入库', icon: ShoppingCart },
-  { path: '/sales', label: '销售出库与套打', icon: Sell },
-  { path: '/inventory', label: '库存与月度核验', icon: Box },
-  { path: '/channels', label: '服务商与机构报备', icon: OfficeBuilding },
-  { path: '/reports', label: '经营报表与返点', icon: DataAnalysis },
-  { path: '/settings', label: '商品与规则设置', icon: Setting },
+const navGroups = [
+  {
+    label: '作业',
+    items: [
+      { path: '/', label: '总控台', icon: Odometer },
+      { path: '/purchase', label: '扫码入库', icon: Download },
+      { path: '/sales', label: '出库与打单', icon: Sell },
+    ],
+  },
+  {
+    label: '追溯',
+    items: [
+      { path: '/trace', label: '一物一码', icon: FullScreen },
+      { path: '/inventory', label: '库存与核验', icon: Box },
+    ],
+  },
+  {
+    label: '渠道',
+    items: [
+      { path: '/channels', label: '服务商与机构', icon: OfficeBuilding },
+      { path: '/reports', label: '报表与返点', icon: DataAnalysis },
+    ],
+  },
+  {
+    label: '系统',
+    items: [{ path: '/settings', label: '商品与规则', icon: Setting }],
+  },
 ];
+
+const routeTitles: Record<string, { title: string; group: string }> = {
+  '/': { title: '总控台', group: '作业' },
+  '/purchase': { title: '扫码入库', group: '作业' },
+  '/sales': { title: '出库与打单', group: '作业' },
+  '/trace': { title: '一物一码', group: '追溯' },
+  '/inventory': { title: '库存与核验', group: '追溯' },
+  '/channels': { title: '服务商与机构', group: '渠道' },
+  '/reports': { title: '报表与返点', group: '渠道' },
+  '/settings': { title: '商品与规则', group: '系统' },
+};
+
+const currentTitle = computed(() => routeTitles[route.path]?.title || '工作台');
+const currentGroup = computed(() => routeTitles[route.path]?.group || '作业');
 
 const roleLabel = computed(() => {
   const map: Record<string, string> = {
@@ -115,7 +185,30 @@ const roleLabel = computed(() => {
   return map[auth.user?.roleCode || ''] || auth.user?.roleCode;
 });
 
+function isActive(path: string) {
+  return route.path === path;
+}
+
+function jumpToTrace() {
+  const code = globalCode.value.trim();
+  if (!code) {
+    router.push('/trace');
+    return;
+  }
+  globalCode.value = '';
+  router.push({ path: '/trace', query: { code } });
+}
+
+function focusScan(e: KeyboardEvent) {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault();
+    scanRef.value?.focus();
+  }
+}
+
 onMounted(() => {
+  window.addEventListener('keydown', focusScan);
+
   socket = io(window.location.origin, { transports: ['websocket', 'polling'] });
   socket.on('connect', () => {
     if (auth.user) {
@@ -123,12 +216,12 @@ onMounted(() => {
     }
   });
   socket.on('warehouse:new_order', (data: { docNo: string; customerName: string; totalAmount: number }) => {
-    liveOrderBanner.value = `${data.docNo} · ${data.customerName} (¥${data.totalAmount})`;
+    liveOrderBanner.value = `${data.docNo} · ${data.customerName} · ¥${data.totalAmount}`;
     playScanBeep('notify');
     speakWarehouseVoice(`您有新的待出库订单，客户${data.customerName}`);
     ElNotification({
       title: '新订单待扫码出库',
-      message: `单号 ${data.docNo}（${data.customerName}），金额 ¥${data.totalAmount}，请及时扫码核验并针式打单`,
+      message: `单号 ${data.docNo}（${data.customerName}），金额 ¥${data.totalAmount}，请及时扫码核验并打印联单`,
       type: 'success',
       duration: 6000,
     });
@@ -145,6 +238,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  window.removeEventListener('keydown', focusScan);
   socket?.disconnect();
 });
 
@@ -159,164 +253,435 @@ function handleLogout() {
   display: flex;
   height: 100vh;
   overflow: hidden;
+  background: var(--paper);
 }
-.sidebar {
-  width: 232px;
+
+/* ---------------- 侧栏 ---------------- */
+.rail {
+  width: 226px;
   flex-shrink: 0;
-  background: var(--sidebar-bg);
-  color: #e6f0ee;
+  background: var(--surface-2);
+  border-right: 1px solid var(--line);
   display: flex;
   flex-direction: column;
-  padding: 18px 12px 14px;
+  padding: 18px 12px 12px;
+  z-index: 40;
 }
-.brand-header {
+
+.brand {
   display: flex;
   align-items: center;
-  gap: 11px;
-  padding: 4px 10px 18px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  margin-bottom: 12px;
+  gap: 10px;
+  padding: 2px 8px 16px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 14px;
 }
+
 .brand-mark {
-  width: 36px;
-  height: 36px;
-  border-radius: 9px;
-  background: linear-gradient(135deg, #0f6e66, #1d9a8f);
-  color: #fff;
-  font-weight: 800;
-  font-size: 18px;
+  width: 30px;
+  height: 30px;
   display: grid;
-  place-items: center;
-  letter-spacing: 1px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 2px;
+  align-items: stretch;
+  padding: 5px 4px;
+  background: var(--brand-ink);
+  border-radius: 5px;
 }
-.brand-name {
-  font-size: 16px;
+.brand-mark span {
+  background: #d9e8e2;
+  border-radius: 1px;
+}
+.brand-mark span:nth-child(2) {
+  transform: scaleY(0.66);
+  align-self: center;
+}
+.brand-mark span:nth-child(3) {
+  transform: scaleY(0.82);
+  align-self: center;
+}
+
+.brand-word {
+  font-size: 14px;
   font-weight: 700;
-  letter-spacing: 0.12em;
-  color: #fff;
+  letter-spacing: 0.16em;
+  color: var(--ink);
+  line-height: 1.2;
 }
 .brand-sub {
-  font-size: 11px;
-  color: #8fb1ac;
-  margin-top: 2px;
+  font-size: 10.5px;
+  color: var(--ink-3);
+  margin-top: 3px;
+  letter-spacing: 0.02em;
 }
-.nav-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+
+.rail-nav {
   flex: 1;
   overflow-y: auto;
-}
-.nav-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  color: #b7ccc9;
-  text-decoration: none;
-  font-size: 13.5px;
-  font-weight: 500;
-  transition: background 0.15s ease, color 0.15s ease;
-}
-.nav-item:hover {
-  background: var(--sidebar-hover);
-  color: #fff;
-}
-.nav-item.active {
-  background: var(--sidebar-active);
-  color: #fff;
-  font-weight: 600;
-}
-.sidebar-footer {
-  padding-top: 12px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 14px;
+  padding-bottom: 8px;
 }
-.mobile-entry-link {
+
+.nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.nav-label {
+  font-size: 10.5px;
+  color: var(--ink-3);
+  padding: 0 10px 5px;
+  letter-spacing: 0.08em;
+}
+
+.nav-item {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 11px;
-  border-radius: 7px;
-  background: rgba(184, 134, 59, 0.16);
-  border: 1px solid rgba(184, 134, 59, 0.35);
-  color: #f3d7a3;
+  gap: 9px;
+  padding: 8px 10px;
+  border-radius: 5px;
+  color: var(--ink-2);
   text-decoration: none;
-  font-size: 12px;
-  font-weight: 500;
+  font-size: 13.5px;
+  transition: background 0.14s ease, color 0.14s ease;
 }
-.mobile-entry-link:hover {
-  background: rgba(184, 134, 59, 0.28);
+
+.nav-item:hover {
+  background: #f1efe7;
+  color: var(--ink);
 }
-.org-pill {
-  padding: 9px 11px;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.05);
-}
-.org-pill-role {
-  font-size: 11px;
-  color: #7cc5be;
-}
-.org-pill-name {
-  font-size: 12.5px;
+
+.nav-item.active {
+  background: var(--brand-tint);
+  color: var(--brand-ink);
   font-weight: 600;
+}
+
+.nav-item.active::before {
+  content: '';
+  position: absolute;
+  left: -12px;
+  top: 7px;
+  bottom: 7px;
+  width: 2px;
+  background: var(--brand);
+  border-radius: 0 2px 2px 0;
+}
+
+.nav-icon {
+  font-size: 15px;
+  color: var(--ink-3);
+}
+.nav-item.active .nav-icon {
+  color: var(--brand);
+}
+
+.nav-badge {
+  margin-left: auto;
+  font-family: var(--font-num);
+  font-size: 11px;
+  background: var(--seal);
   color: #fff;
+  border-radius: 99px;
+  padding: 0 6px;
+  line-height: 16px;
+}
+
+.rail-footer {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mobile-entry {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px;
+  border-radius: 5px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+  text-decoration: none;
+  font-size: 11.5px;
+  transition: border-color 0.14s ease, color 0.14s ease;
+}
+.mobile-entry:hover {
+  border-color: var(--brand-line);
+  color: var(--brand-ink);
+}
+.entry-arrow {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.org-card {
+  padding: 8px 10px;
+  border-radius: 5px;
+  background: var(--surface-3);
+}
+.org-role {
+  font-size: 10.5px;
+  color: var(--ink-3);
+}
+.org-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
   margin-top: 2px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* ---------------- 主区 ---------------- */
 .main-area {
   flex: 1;
   display: flex;
   flex-direction: column;
   min-width: 0;
 }
+
 .topbar {
-  height: 54px;
-  background: var(--bg-surface);
-  border-bottom: 1px solid var(--border-subtle);
+  height: 56px;
+  flex-shrink: 0;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
   padding: 0 24px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  flex-shrink: 0;
+  gap: 18px;
 }
-.topbar-left,
+
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.rail-toggle {
+  display: none;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 5px;
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--ink-2);
+}
+
+.crumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+.crumb-parent {
+  color: var(--ink-3);
+}
+.crumb-slash {
+  color: var(--line-strong);
+}
+.crumb-now {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.global-scan {
+  flex: 1;
+  max-width: 520px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-2);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.global-scan:focus-within {
+  border-color: var(--brand-line);
+  background: #fff;
+}
+.gs-icon {
+  color: var(--ink-3);
+  font-size: 15px;
+}
+.gs-input {
+  flex: 1;
+  border: 0;
+  outline: none;
+  background: transparent;
+  font-size: 12.5px;
+  color: var(--ink);
+  letter-spacing: 0.02em;
+  min-width: 0;
+}
+.gs-input::placeholder {
+  color: var(--ink-3);
+  font-family: var(--font-ui);
+  letter-spacing: 0;
+}
+.gs-kbd {
+  font-family: var(--font-ui);
+  font-size: 10.5px;
+  color: var(--ink-3);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 4px;
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+
 .topbar-right {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+  flex-shrink: 0;
 }
-.env-badge {
+
+.env-chip {
+  font-size: 11.5px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.env-chip.hq {
+  border-color: var(--brand-line);
+  background: var(--brand-tint);
+  color: var(--brand-ink);
+}
+.env-chip.dealer {
+  border-color: #d9cbaa;
+  background: var(--ochre-tint);
+  color: var(--ochre);
+}
+
+.user-name {
+  font-size: 12.5px;
+  color: var(--ink);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.text-btn {
+  border: 0;
+  background: transparent;
+  color: var(--ink-3);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 4px 2px;
+  font-family: inherit;
+}
+.text-btn:hover {
+  color: var(--brand);
+}
+
+.live-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 24px;
+  background: var(--ochre-tint);
+  border-bottom: 1px solid #e8d7b4;
+  font-size: 12.5px;
+  color: #6d4a0d;
+  cursor: pointer;
+}
+.live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #b8801f;
+  box-shadow: 0 0 0 3px rgba(184, 128, 31, 0.18);
+  animation: live-pulse 1.6s ease-in-out infinite;
+}
+@keyframes live-pulse {
+  50% {
+    box-shadow: 0 0 0 6px rgba(184, 128, 31, 0.06);
+  }
+}
+.live-text {
+  font-weight: 500;
+}
+.live-go {
+  margin-left: auto;
   font-size: 12px;
   font-weight: 600;
-  padding: 4px 10px;
-  border-radius: 6px;
-  background: var(--brand-primary-soft);
-  color: var(--brand-primary);
+  color: #8a5e12;
 }
-.live-alert-pill {
-  font-size: 12px;
-  padding: 4px 12px;
-  border-radius: 99px;
-  background: var(--brand-gold-soft);
-  border: 1px solid #e7cfa3;
-  color: #8b5e16;
-  cursor: pointer;
-  font-weight: 500;
-}
-.user-label {
-  font-size: 13px;
-  color: var(--text-secondary);
-  font-weight: 500;
-}
+
 .content-scroll {
   flex: 1;
   overflow-y: auto;
-  padding: 22px 26px 32px;
+  padding: 24px 28px 40px;
+}
+
+.content-scroll > :deep(*) {
+  max-width: 1400px;
+}
+
+.rail-scrim {
+  display: none;
+}
+
+@media (max-width: 1080px) {
+  .rail {
+    position: fixed;
+    inset: 0 auto 0 0;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    box-shadow: 0 0 40px rgba(23, 33, 31, 0.18);
+  }
+  .rail.open {
+    transform: none;
+  }
+  .rail-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(16, 28, 26, 0.35);
+    z-index: 30;
+  }
+  .rail-toggle {
+    display: inline-flex;
+  }
+  .gs-kbd {
+    display: none;
+  }
+  .global-scan {
+    max-width: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .topbar {
+    padding: 0 14px;
+    gap: 10px;
+  }
+  .crumb,
+  .env-chip,
+  .user-name {
+    display: none;
+  }
+  .content-scroll {
+    padding: 16px 14px 32px;
+  }
 }
 </style>

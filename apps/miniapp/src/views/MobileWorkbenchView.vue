@@ -1,20 +1,24 @@
 <template>
   <div class="phone-frame">
     <header class="wb-header">
-      <div>
-        <div style="font-size: 15px; font-weight: 700">Lumina 外勤销售移动工作台</div>
-        <div style="font-size: 11px; color: #9fc4bf">{{ user ? `${user.realName} · ${user.orgName}` : '未登录' }}</div>
+      <div class="wb-brand">
+        <div class="wb-word">LUMINA</div>
+        <div class="wb-caption">外勤销售工作台</div>
       </div>
-      <div style="display: flex; gap: 8px">
-        <router-link to="/v" class="hdr-link">C端验真</router-link>
-        <button v-if="user" class="hdr-link" @click="logout">退出</button>
+      <div class="wb-head-right">
+        <span v-if="user" class="wb-user">{{ user.realName }}</span>
+        <router-link to="/v" class="hdr-link">C 端验真</router-link>
+        <button v-if="user" class="hdr-link" type="button" @click="logout">退出</button>
       </div>
     </header>
 
-    <!-- Login View if unauthenticated -->
+    <!-- 登录 -->
     <div v-if="!user" class="wb-body">
-      <div class="m-card">
-        <h2 style="margin: 0 0 14px; font-size: 17px">外勤销售 / 服务商登录</h2>
+      <div class="m-card login-card">
+        <div class="m-kicker">FIELD SALES</div>
+        <h2 class="m-section-title login-title">外勤销售 / 服务商登录</h2>
+        <p class="m-section-desc">手机上下单，PC 仓库即时收到待出库订单并扫码打单。</p>
+
         <div class="m-field">
           <label class="m-label">账号</label>
           <input v-model="loginForm.username" class="m-input" placeholder="如 sales_nc 或 dealer_nc" />
@@ -23,28 +27,29 @@
           <label class="m-label">密码</label>
           <input v-model="loginForm.password" type="password" class="m-input" />
         </div>
-        <button class="m-btn m-btn-primary" @click="doLogin">登录移动工作台</button>
-        <div style="margin-top: 12px; display: flex; gap: 8px">
-          <button class="m-btn m-btn-soft" style="font-size: 12px; padding: 8px" @click="quick('sales_nc')">外勤销售体验</button>
-          <button class="m-btn m-btn-soft" style="font-size: 12px; padding: 8px" @click="quick('dealer_nc')">南昌服务商体验</button>
+        <button class="m-btn m-btn-primary" @click="doLogin">登录工作台</button>
+
+        <div class="quick-row">
+          <button class="m-btn m-btn-soft quick-btn" @click="quick('sales_nc')">外勤销售体验</button>
+          <button class="m-btn m-btn-soft quick-btn" @click="quick('dealer_nc')">南昌服务商体验</button>
         </div>
       </div>
     </div>
 
-    <!-- Authenticated Mobile Workbench -->
+    <!-- 已登录 -->
     <template v-else>
       <div class="wb-body">
         <div v-if="toastMsg" class="toast-bar" :class="toastType">{{ toastMsg }}</div>
 
-        <!-- Tab 1: Mobile Quick Order (Pushes real-time WS alert to PC Warehouse!) -->
+        <!-- 下单 -->
         <div v-if="tab === 'order'" class="m-card">
-          <h3 class="sec-h">手机快捷下单（实时推送仓库打单）</h3>
+          <h3 class="m-section-title">手机下单</h3>
+          <p class="m-section-desc">提交后实时推送到 PC 仓库，仓管扫码出库并把码记到机构名下。</p>
+
           <div class="m-field">
-            <label class="m-label">选择终端机构</label>
+            <label class="m-label">终端机构</label>
             <select v-model="orderForm.clinicId" class="m-select">
-              <option v-for="c in clinics" :key="c.id" :value="c.id">
-                {{ c.name }} ({{ c.city }})
-              </option>
+              <option v-for="c in clinics" :key="c.id" :value="c.id">{{ c.name }}（{{ c.city }}）</option>
             </select>
           </div>
           <div class="m-field">
@@ -54,40 +59,56 @@
             </select>
           </div>
           <div class="m-field">
-            <label class="m-label">选择商品</label>
+            <label class="m-label">商品</label>
             <select v-model="orderForm.productId" class="m-select">
               <option v-for="p in products" :key="p.id" :value="p.id">
-                {{ p.name }} (指导¥{{ p.retailPrice }})
+                {{ p.name }}（指导 ¥{{ p.retailPrice }}）
               </option>
             </select>
           </div>
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px">
+          <div class="two-col">
             <div class="m-field">
               <label class="m-label">数量（盒）</label>
               <input v-model.number="orderForm.qty" type="number" min="1" class="m-input" />
             </div>
             <div class="m-field">
-              <label class="m-label">折扣（%，红线≥35）</label>
+              <label class="m-label">折扣（%）</label>
               <input v-model.number="orderForm.discountPercent" type="number" min="10" max="100" class="m-input" />
             </div>
           </div>
-          <div class="m-field">
-            <label class="m-label">备注</label>
-            <input v-model="orderForm.remark" class="m-input" placeholder="如：今日下午顺丰加急发出" />
+
+          <div class="quote" :class="{ blocked: belowRedline }">
+            <div class="quote-row">
+              <span>折算单价</span>
+              <span class="num">¥{{ discountedUnit.toFixed(2) }}</span>
+            </div>
+            <div class="quote-row">
+              <span>本单合计</span>
+              <span class="num quote-total">¥{{ orderTotal.toFixed(2) }}</span>
+            </div>
+            <div class="quote-note">
+              {{ belowRedline ? '低于 3.5 折供货红线，提交会被拦截，需总部特批' : '在供货红线之上，可直接提交' }}
+            </div>
           </div>
-          <button class="m-btn m-btn-primary" @click="submitMobileOrder">
-            提交订单并推送至 PC 仓库
-          </button>
+
+          <div class="m-field" style="margin-top: 12px">
+            <label class="m-label">备注</label>
+            <input v-model="orderForm.remark" class="m-input" placeholder="如：今日下午顺丰加急" />
+          </div>
+
+          <button class="m-btn m-btn-primary" @click="submitMobileOrder">提交订单并推送仓库</button>
         </div>
 
-        <!-- Tab 2: Field Clinic Reporting -->
+        <!-- 报备 -->
         <div v-else-if="tab === 'report'" class="m-card">
-          <h3 class="sec-h">外勤现场机构报备（锁 90 天保护）</h3>
+          <h3 class="m-section-title">现场机构报备</h3>
+          <p class="m-section-desc">提交即锁定服务端时间戳。同城两个人同时报备，先提交的算数。</p>
+
           <div class="m-field">
             <label class="m-label">机构全称</label>
             <input v-model="reportForm.name" class="m-input" placeholder="如：南昌悦颜皮肤管理中心" />
           </div>
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px">
+          <div class="two-col">
             <div class="m-field">
               <label class="m-label">所在城市</label>
               <input v-model="reportForm.city" class="m-input" />
@@ -101,52 +122,60 @@
             <label class="m-label">负责人姓名</label>
             <input v-model="reportForm.contactName" class="m-input" />
           </div>
-          <button class="m-btn m-btn-primary" @click="submitMobileReport">
-            立即抢单报备（生成系统时间戳）
-          </button>
+
+          <button class="m-btn m-btn-primary" @click="submitMobileReport">报备并锁定 90 天保护</button>
         </div>
 
-        <!-- Tab 3: Live Stock Lookup -->
+        <!-- 库存 -->
         <div v-else-if="tab === 'stock'" class="m-card">
-          <h3 class="sec-h">实时在仓库存查询</h3>
+          <h3 class="m-section-title">在仓库存</h3>
+          <p class="m-section-desc">实时同步 PC 端，下单前先看一眼有没有货。</p>
+
+          <div v-if="!balances.length" class="m-empty">当前没有库存记录</div>
           <div v-for="b in balances" :key="b.id" class="stock-row">
-            <div>
-              <div style="font-weight: 600; font-size: 14px">{{ b.product.name }}</div>
-              <div style="font-size: 11.5px; color: var(--m-muted)">{{ b.warehouse.name }} · {{ b.product.skuCode }}</div>
+            <div class="stock-main">
+              <div class="stock-name">{{ b.product.name }}</div>
+              <div class="stock-meta">{{ b.warehouse.name }} · <span class="mono">{{ b.product.skuCode }}</span></div>
             </div>
-            <div class="mono" style="font-size: 16px; font-weight: 700; color: var(--m-primary)">
-              {{ b.qty }} {{ b.product.unitName }}
+            <div class="stock-qty">
+              <span class="num">{{ b.qty }}</span>
+              <span class="stock-unit">{{ b.product.unitName }}</span>
             </div>
           </div>
         </div>
 
-        <!-- Tab 4: Orders Status -->
+        <!-- 订单 -->
         <div v-else class="m-card">
-          <h3 class="sec-h">近期订单与发货进度</h3>
-          <div v-for="o in orders" :key="o.id" class="stock-row" style="flex-direction: column; align-items: stretch; gap: 4px">
-            <div style="display: flex; justify-content: space-between">
-              <strong class="mono" style="font-size: 13px">{{ o.docNo }}</strong>
-              <span style="font-size: 11.5px; color: var(--m-primary); font-weight: 600">{{ o.status }}</span>
+          <h3 class="m-section-title">我的订单</h3>
+          <p class="m-section-desc">状态与 PC 端一致，出库后即可查看归属到客户的码。</p>
+
+          <div v-if="!orders.length" class="m-empty">还没有订单</div>
+          <div v-for="o in orders" :key="o.id" class="order-row">
+            <div class="order-top">
+              <span class="mono order-doc">{{ o.docNo }}</span>
+              <span class="order-status" :class="statusClass(o.status)">{{ statusLabel(o.status) }}</span>
             </div>
-            <div style="font-size: 12.5px; color: var(--m-sub)">
-              {{ o.clinic?.name || o.buyerOrg?.name }} · ¥{{ Number(o.totalAmount).toFixed(2) }}
+            <div class="order-mid">{{ o.clinic?.name || o.buyerOrg?.name }}</div>
+            <div class="order-bot">
+              <span class="muted">{{ (o.items || []).reduce((s: number, i: any) => s + i.qty, 0) }} 盒</span>
+              <span class="num order-amount">¥{{ Number(o.totalAmount).toFixed(2) }}</span>
             </div>
           </div>
         </div>
       </div>
 
-      <nav class="bottom-nav">
-        <button :class="{ active: tab === 'order' }" @click="tab = 'order'">移动下单</button>
-        <button :class="{ active: tab === 'report' }" @click="tab = 'report'">机构报备</button>
-        <button :class="{ active: tab === 'stock' }" @click="tab = 'stock'">查库存</button>
-        <button :class="{ active: tab === 'orders' }" @click="tab = 'orders'">我的订单</button>
+      <nav class="m-nav">
+        <button :class="{ active: tab === 'order' }" @click="tab = 'order'">下单</button>
+        <button :class="{ active: tab === 'report' }" @click="tab = 'report'">报备</button>
+        <button :class="{ active: tab === 'stock' }" @click="tab = 'stock'">库存</button>
+        <button :class="{ active: tab === 'orders' }" @click="tab = 'orders'">订单</button>
       </nav>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { mApi } from '../utils/api';
 
 const user = ref<any>(
@@ -186,6 +215,14 @@ const reportForm = ref({
   contactName: '',
   contactPhone: '',
 });
+
+const currentProduct = computed(() => products.value.find((p) => p.id === orderForm.value.productId));
+const discountedUnit = computed(() => {
+  const price = Number(currentProduct.value?.retailPrice || 0);
+  return (price * orderForm.value.discountPercent) / 100;
+});
+const orderTotal = computed(() => discountedUnit.value * Number(orderForm.value.qty || 0));
+const belowRedline = computed(() => Number(orderForm.value.discountPercent) < 35);
 
 function showToast(msg: string, type: 'ok' | 'err' = 'ok') {
   toastMsg.value = msg;
@@ -257,7 +294,7 @@ async function submitMobileOrder() {
         },
       ],
     })) as any;
-    showToast(`下单成功（${res.order.docNo}），已实时推送至仓库 PC 端准备扫码打单！`, 'ok');
+    showToast(`下单成功（${res.order.docNo}），仓库已收到待出库提醒`, 'ok');
     orderForm.value.remark = '';
     await loadData();
   } catch (err: any) {
@@ -269,7 +306,7 @@ async function submitMobileReport() {
   if (!reportForm.value.name.trim()) return showToast('请输入机构名称', 'err');
   try {
     const res = (await mApi.post('/clinics/report', reportForm.value)) as any;
-    showToast(`${res.message}（时间戳：${res.serverTimestamp.slice(0, 19)}）`, 'ok');
+    showToast(`${res.message}（${res.serverTimestamp.slice(0, 19)}）`, 'ok');
     reportForm.value.name = '';
     await loadData();
   } catch (err: any) {
@@ -277,83 +314,257 @@ async function submitMobileReport() {
   }
 }
 
+function statusLabel(s: string) {
+  const m: Record<string, string> = {
+    DRAFT: '草稿',
+    PENDING_APPROVAL: '待特批',
+    PENDING_OUTBOUND: '待出库',
+    PARTIAL_OUTBOUND: '部分出库',
+    COMPLETED: '已出库',
+    CANCELLED: '已撤销',
+  };
+  return m[s] || s;
+}
+
+function statusClass(s: string) {
+  if (s === 'COMPLETED') return 'done';
+  if (s === 'PENDING_APPROVAL') return 'bad';
+  return 'open';
+}
+
 onMounted(loadData);
 </script>
 
 <style scoped>
 .wb-header {
-  background: #102321;
+  background: #101c1a;
   color: #fff;
-  padding: 14px 16px;
+  padding: 15px 16px;
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 10px;
+}
+.wb-word {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  color: #eef4f1;
+}
+.wb-caption {
+  font-size: 10.5px;
+  color: #7f9a94;
+  margin-top: 2px;
+}
+.wb-head-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.wb-user {
+  font-size: 11.5px;
+  color: #b7cbc6;
+  margin-right: 2px;
 }
 .hdr-link {
-  background: rgba(255, 255, 255, 0.12);
-  color: #e8cd97;
-  border: none;
-  border-radius: 99px;
-  padding: 5px 10px;
-  font-size: 11.5px;
+  background: transparent;
+  color: #cfe3dc;
+  border: 1px solid rgba(207, 227, 220, 0.22);
+  border-radius: 4px;
+  padding: 5px 9px;
+  font-size: 11px;
   text-decoration: none;
   cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
 }
 .wb-body {
   padding: 14px 14px 76px;
   flex: 1;
 }
-.sec-h {
-  margin: 0 0 14px;
-  font-size: 15.5px;
-  font-weight: 700;
+.login-card {
+  margin-top: 8px;
 }
+.login-title {
+  font-size: 17px;
+  margin-top: 2px;
+}
+.quick-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.quick-btn {
+  font-size: 12px;
+  padding: 9px 8px;
+}
+
+.two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
 .toast-bar {
   padding: 10px 12px;
-  border-radius: 10px;
+  border-radius: 8px;
   font-size: 12.5px;
-  font-weight: 600;
+  font-weight: 500;
   margin-bottom: 12px;
+  line-height: 1.5;
 }
 .toast-bar.ok {
-  background: #ecfdf3;
-  color: #15803d;
-  border: 1px solid #bbf7d0;
+  background: #eef4ee;
+  color: #2f6b45;
+  border: 1px solid #cfe0d3;
 }
 .toast-bar.err {
-  background: #fdf2f2;
-  color: #c81e1e;
-  border: 1px solid #fecaca;
+  background: var(--m-seal-soft);
+  color: var(--m-seal);
+  border: 1px solid #e8c4bc;
 }
+
+/* 报价 */
+.quote {
+  background: var(--m-surface-2);
+  border: 1px solid var(--m-line);
+  border-radius: 8px;
+  padding: 11px 13px;
+}
+.quote.blocked {
+  background: var(--m-seal-soft);
+  border-color: #e8c4bc;
+}
+.quote-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 12.5px;
+  color: var(--m-sub);
+  padding: 2px 0;
+}
+.quote-total {
+  font-size: 18px;
+  color: var(--m-ink);
+  font-weight: 600;
+}
+.quote-note {
+  font-size: 10.5px;
+  color: var(--m-muted);
+  margin-top: 6px;
+  border-top: 1px solid var(--m-line);
+  padding-top: 6px;
+  line-height: 1.5;
+}
+.quote.blocked .quote-note {
+  color: var(--m-seal);
+  border-top-color: #e8c4bc;
+}
+
+/* 库存 */
 .stock-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
   padding: 11px 0;
-  border-bottom: 1px solid var(--m-border);
+  border-bottom: 1px solid var(--m-line);
 }
 .stock-row:last-child {
   border-bottom: none;
+  padding-bottom: 0;
 }
-.bottom-nav {
-  position: sticky;
-  bottom: 0;
-  background: #fff;
-  border-top: 1px solid var(--m-border);
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
+.stock-main {
+  min-width: 0;
 }
-.bottom-nav button {
-  padding: 13px 4px;
-  background: none;
-  border: none;
-  font-size: 12.5px;
-  font-weight: 600;
+.stock-name {
+  font-size: 13.5px;
+  font-weight: 500;
+}
+.stock-meta {
+  font-size: 11px;
   color: var(--m-muted);
-  cursor: pointer;
+  margin-top: 2px;
 }
-.bottom-nav button.active {
-  color: var(--m-primary);
-  border-top: 2px solid var(--m-primary);
+.stock-qty {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.stock-qty .num {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--m-primary-dark);
+}
+.stock-unit {
+  font-size: 10.5px;
+  color: var(--m-muted);
+}
+
+/* 订单 */
+.order-row {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--m-line);
+}
+.order-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+.order-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+.order-doc {
+  font-size: 12px;
+  color: var(--m-primary-dark);
+  font-weight: 600;
+}
+.order-status {
+  font-size: 10.5px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid transparent;
+}
+.order-status.open {
+  background: var(--m-primary-soft);
+  border-color: var(--m-primary-line);
+  color: var(--m-primary-dark);
+}
+.order-status.done {
+  background: #eef4ee;
+  border-color: #cfe0d3;
+  color: var(--m-success);
+}
+.order-status.bad {
+  background: var(--m-seal-soft);
+  border-color: #e8c4bc;
+  color: var(--m-seal);
+}
+.order-mid {
+  font-size: 13px;
+  margin-top: 5px;
+}
+.order-bot {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-top: 4px;
+}
+.order-amount {
+  font-size: 14px;
+  font-weight: 600;
+}
+.muted {
+  font-size: 11px;
+  color: var(--m-muted);
+}
+.m-empty {
+  padding: 26px 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--m-muted);
 }
 </style>

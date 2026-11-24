@@ -72,6 +72,7 @@ export class RebateService {
           buyerOrg: { select: { name: true } },
           clinic: { select: { name: true } },
           warehouse: { select: { name: true } },
+          items: { include: { product: { select: { name: true } } } },
         },
         orderBy: { createdAt: 'desc' },
         take: 8,
