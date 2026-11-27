@@ -42,6 +42,31 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   notifyAlert(payload: { id: string; alertType: string; title: string; severity: string }) {
     this.server?.to('role:HQ').emit('compliance:new_alert', payload);
   }
+
+  notifyScanActivity(
+    orgIds: Array<string | null | undefined>,
+    payload: {
+      actionType: 'REGISTER_INBOUND' | 'HQ_INBOUND' | 'DEALER_INBOUND' | 'HQ_OUTBOUND' | 'DEALER_OUTBOUND';
+      actionLabel: string;
+      docNo: string;
+      operatorName: string;
+      unitCount: number;
+      warehouseName?: string;
+      targetName?: string;
+      sampleToken?: string;
+      occurredAt: string;
+    },
+  ) {
+    const rooms = new Set<string>(['role:HQ']);
+    for (const id of orgIds) {
+      if (id) rooms.add(`org:${id}`);
+    }
+    let emitter = this.server as any;
+    for (const room of rooms) {
+      emitter = emitter?.to(room);
+    }
+    emitter?.emit('trace:scan_activity', payload);
+  }
 }
 
 @Global()

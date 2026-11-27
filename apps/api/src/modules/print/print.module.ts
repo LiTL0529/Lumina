@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Module, NotFoundException, Param, Put } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, Get, Module, NotFoundException, Param, Put } from '@nestjs/common';
 import { PrintPaperType } from '@lumina/shared-types';
 import {
   buildHiprintTemplate,
@@ -7,6 +7,7 @@ import {
   PAPER_DIMENSIONS,
 } from '@lumina/print-templates';
 import { PrismaService } from '../../common/prisma.module';
+import { AuthUser, CurrentUser } from '../../common/auth.decorators';
 
 @Controller('print')
 export class PrintController {
@@ -27,6 +28,7 @@ export class PrintController {
 
   @Put('templates/:id')
   async updateTemplate(
+    @CurrentUser() user: AuthUser,
     @Param('id') id: string,
     @Body()
     body: {
@@ -36,6 +38,9 @@ export class PrintController {
       systemVars?: string[];
     },
   ) {
+    if (user.orgType !== 'HQ') {
+      throw new ForbiddenException('仅品牌总部可修改打印模板');
+    }
     const existing = await this.prisma.printTemplate.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('打印模板不存在');
 
@@ -71,7 +76,10 @@ export class PrintController {
   }
 
   @Get('sales-order/:id')
-  async getSalesOrderPrintPayload(@Param('id') id: string) {
+  async getSalesOrderPrintPayload(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+  ) {
     const order = await this.prisma.salesOrder.findUnique({
       where: { id },
       include: {
@@ -83,6 +91,13 @@ export class PrintController {
       },
     });
     if (!order) throw new NotFoundException('销售单不存在');
+    if (
+      user.orgType !== 'HQ' &&
+      order.sellerOrgId !== user.orgId &&
+      order.buyerOrgId !== user.orgId
+    ) {
+      throw new ForbiddenException('无权打印或查看其他主体的销售单');
+    }
 
     const traceEvents = await this.prisma.traceEvent.findMany({
       where: { docNo: order.docNo },

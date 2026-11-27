@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma.module';
 import { AuthUser, CurrentUser } from '../../common/auth.decorators';
+import { parsePagination } from '../../common/pagination';
 
 @Controller()
 export class ProductController {
@@ -40,20 +41,40 @@ export class ProductController {
   }
 
   @Get('products')
-  async listProducts(@Query('keyword') keyword?: string, @Query('brandId') brandId?: string) {
+  async listProducts(
+    @Query('keyword') keyword?: string,
+    @Query('brandId') brandId?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    const where = {
+      ...(brandId ? { brandId } : {}),
+      ...(keyword
+        ? {
+            OR: [
+              { name: { contains: keyword, mode: 'insensitive' as const } },
+              { skuCode: { contains: keyword, mode: 'insensitive' as const } },
+              { barcode: { contains: keyword, mode: 'insensitive' as const } },
+            ],
+          }
+        : {}),
+    };
+    const pg = parsePagination({ page, pageSize }, 20);
+    if (pg.enabled) {
+      const [total, items] = await Promise.all([
+        this.prisma.product.count({ where }),
+        this.prisma.product.findMany({
+          where,
+          include: { brand: true, category: true },
+          orderBy: { createdAt: 'asc' },
+          skip: pg.skip,
+          take: pg.pageSize,
+        }),
+      ]);
+      return { items, total, page: pg.page, pageSize: pg.pageSize };
+    }
     return this.prisma.product.findMany({
-      where: {
-        ...(brandId ? { brandId } : {}),
-        ...(keyword
-          ? {
-              OR: [
-                { name: { contains: keyword, mode: 'insensitive' } },
-                { skuCode: { contains: keyword, mode: 'insensitive' } },
-                { barcode: { contains: keyword, mode: 'insensitive' } },
-              ],
-            }
-          : {}),
-      },
+      where,
       include: {
         brand: true,
         category: true,

@@ -67,7 +67,7 @@ model User {
   roleCode     String   // HQ_ADMIN | HQ_WAREHOUSE | HQ_COMPLIANCE | DEALER_ADMIN | DEALER_WAREHOUSE | SALES_REP
   username     String   @unique
   realName     String
-  phone        String?
+  phone        String?  @unique
   openid       String?  @unique
   passwordHash String
   status       String   @default("ACTIVE")
@@ -151,35 +151,53 @@ model Supplier {
 // ============================================================================
 
 model Clinic {
-  id              String        @id @default(cuid())
-  name            String
-  fingerprint     String        @unique // Normalized dedup fingerprint
-  creditCode      String?
-  province        String?
-  city            String
-  cityCode        String
-  address         String?
-  contactName     String?
-  contactPhone    String?
-  ownerOrgId      String?
-  ownerOrg        Organization? @relation("ClinicOwnerOrg", fields: [ownerOrgId], references: [id])
-  ownerSalesId    String?
-  bindStatus      String        @default("PUBLIC_POOL") // PUBLIC_POOL | PROTECTED_90D | BOUND_ACTIVE
-  reportedAt      DateTime?     // Server UTC timestamp of successful report
-  protectExpireAt DateTime?     // reportedAt + 90 days
-  lastOrderAt     DateTime?     // Reset on every valid outbound; +270d auto unbind
-  arrearsAmount   Decimal       @default(0) @db.Decimal(18, 2)
-  tags            Json          @default("[]")
-  remark          String?
-  status          String        @default("ACTIVE")
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  id                   String        @id @default(cuid())
+  name                 String
+  fingerprint          String        @unique // Normalized dedup fingerprint
+  creditCode           String?
+  province             String?
+  city                 String
+  cityCode             String
+  address              String?
+  contactName          String?
+  contactRole          String?
+  contactPhone         String?
+  wechatId             String?
+  ownerOrgId           String?
+  ownerOrg             Organization? @relation("ClinicOwnerOrg", fields: [ownerOrgId], references: [id])
+  ownerSalesId         String?
+  salesRepName         String?
+  bindStatus           String        @default("PUBLIC_POOL") // PROSPECT_LEAD | PUBLIC_POOL | PROTECTED_90D | BOUND_ACTIVE
+  lifecycleStage       String        @default("PROSPECT") // PROSPECT | EXISTING_ACTIVE | EXISTING_DORMANT
+  reportedAt           DateTime?     // Server UTC timestamp of successful report
+  protectExpireAt      DateTime?     // reportedAt + 90 days
+  firstOrderAt         DateTime?     // First approved/paid order date (non-null => existing client)
+  convertedAt          DateTime?     // Timestamp when prospect converted to existing client
+  convertedBySalesId   String?
+  lastOrderAt          DateTime?     // Reset on every valid order/outbound; +270d auto unbind
+  arrearsAmount        Decimal       @default(0) @db.Decimal(18, 2)
+  leadSource           String?
+  storeType            String?
+  trafficPrice         String?
+  storeArea            String?
+  beauticianCount      String?
+  storeScale           String?
+  customProfile        Json          @default("{}")
+  initialScoreSnapshot Json?
+  tags                 Json          @default("[]")
+  remark               String?
+  status               String        @default("ACTIVE")
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
 
   protectionLogs ClinicProtectionLog[]
   salesOrders    SalesOrder[]
   returnOrders   ReturnOrder[]
+  visitTargets   VisitPlanTarget[]
+  followUpLogs   VisitFollowUpLog[]
 
   @@index([ownerOrgId, bindStatus])
+  @@index([ownerOrgId, lifecycleStage])
   @@index([bindStatus, protectExpireAt])
   @@index([bindStatus, lastOrderAt])
 }
@@ -575,6 +593,9 @@ model SystemRuleConfig {
   highFreqVerifyThreshold Int      @default(5)
   allowSpecialPriceApprove Boolean @default(true)
   verifyBaseUrl           String   @default("http://localhost:5174/v")
+  jumdataAppId            String?
+  jumdataAppSecret        String?
+  jumdataSmsTemplateId    String   @default("JM1000372")
   updatedAt               DateTime @updatedAt
 }
 
@@ -608,4 +629,164 @@ model FinanceLedger {
   bizTime     DateTime       @default(now())
 
   @@index([orgId, bizTime])
+}
+
+// ============================================================================
+// 8. Regional Dealer Sales CRM: Monthly Visit Plans, 5-Dim Scoring & Follow-Ups
+// ============================================================================
+
+model VisitPlanTarget {
+  id                String             @id @default(cuid())
+  orgId             String
+  salesRepId        String?
+  salesRepName      String
+  planMonth         String             // YYYY-MM
+  clinicName        String
+  cityRegion        String
+  leadSource        String?
+  plannedVisitDate  String?            // YYYY-MM-DD
+  storeType         String?
+  storeTypeScore    Int                @default(0)
+  trafficPrice      String?
+  trafficPriceScore Int                @default(0)
+  storeArea         String?
+  storeAreaScore    Int                @default(0)
+  beauticianCount   String?
+  beauticianScore   Int                @default(0)
+  storeScale        String?
+  storeScaleScore   Int                @default(0)
+  totalScore        Int                @default(0)
+  storeGrade        String             @default("") // 优秀门店 | 精准门店 | 有效门店 | 暂不匹配
+  actionAdvice      String             @default("")
+  isCompleted       Boolean            @default(false) // All 7 required fields filled (✓ 已拜访完成)
+  validationText    String             @default("待填写")
+  linkedClinicId    String?
+  linkedClinic      Clinic?            @relation(fields: [linkedClinicId], references: [id], onDelete: SetNull)
+  conversionStatus  String             @default("IN_PROGRESS") // IN_PROGRESS | CONVERTED
+  convertedAt       DateTime?
+  convertedOrderId  String?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  followUps VisitFollowUpLog[]
+
+  @@index([orgId, planMonth])
+  @@index([orgId, salesRepName, planMonth])
+  @@index([orgId, clinicName])
+  @@index([orgId, conversionStatus])
+  @@index([linkedClinicId])
+}
+
+model VisitFollowUpLog {
+  id                String           @id @default(cuid())
+  orgId             String
+  clinicId          String?
+  clinic            Clinic?          @relation(fields: [clinicId], references: [id], onDelete: SetNull)
+  visitScene        String           @default("NEW_PROSPECT") // NEW_PROSPECT | EXISTING_MAINTENANCE
+  targetId          String?
+  target            VisitPlanTarget? @relation(fields: [targetId], references: [id], onDelete: SetNull)
+  salesRepId        String?
+  salesRepName      String
+  customerName      String
+  cityRegion        String           @default("未匹配")
+  visitDate         String           // YYYY-MM-DD
+  storeType         String?
+  storeArea         String?
+  contactName       String?
+  contactRole       String?
+  contactPhone      String?
+  wechatId          String?
+  channelSource     String?
+  visitType         String?          // Existing maintenance: 到店回访 | 微信/电话跟进 | 带教培训 | 活动邀约
+  stockRemainBoxes  Int?             // Existing maintenance: current remaining stock at clinic
+  repurchaseIntent  String?          // Existing maintenance: 明确补货 | 观望跟进 | 库存充足暂不补 | 存在流失风险
+  visitSummary      String?
+  customerNeed      String?
+  cityMeetingStatus String?
+  dealStatus        String?
+  extraFields       Json             @default("{}")
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  @@index([orgId, visitDate])
+  @@index([orgId, visitScene, visitDate])
+  @@index([orgId, customerName])
+  @@index([targetId])
+  @@index([clinicId, visitDate])
+}
+
+model CrmFormTemplate {
+  id           String   @id @default(cuid())
+  sceneCode    String   @unique // NEW_PROSPECT_VISIT | EXISTING_CLIENT_VISIT | CUSTOMER_PROFILE_EXTRA
+  title        String
+  fieldsSchema Json     @default("[]")
+  formulaRules Json     @default("{}")
+  version      Int      @default(1)
+  isActive     Boolean  @default(true)
+  updatedAt    DateTime @updatedAt
+}
+
+model VisitMonthlyGoal {
+  id           String   @id @default(cuid())
+  orgId        String
+  salesRepName String
+  planMonth    String   // YYYY-MM
+  targetQuota  Int      @default(100)
+  updatedAt    DateTime @updatedAt
+
+  @@unique([orgId, salesRepName, planMonth])
+  @@index([orgId, planMonth])
+}
+
+// ============================================================================
+// 9. Operation Audit Trail & AI Business Copilot Sessions
+// ============================================================================
+
+model AuditLog {
+  id           String   @id @default(cuid())
+  orgId        String?
+  operatorId   String?
+  operatorName String
+  roleCode     String?
+  module       String   // STOCK | ORDER | TRACE | CLINIC | CRM | RULE | ORG | PRODUCT | REBATE | AI
+  action       String   // INBOUND | OUTBOUND | SPECIAL_APPROVE | ALERT_RESOLVE | CLINIC_REPORT | RULE_UPDATE | AI_QUERY ...
+  targetType   String?
+  targetId     String?
+  summary      String
+  diffSnapshot Json     @default("{}")
+  createdAt    DateTime @default(now())
+
+  @@index([orgId, createdAt])
+  @@index([module, createdAt])
+  @@index([operatorId, createdAt])
+}
+
+model AiChatSession {
+  id        String          @id @default(cuid())
+  userId    String
+  orgId     String
+  roleCode  String
+  title     String
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+  messages  AiChatMessage[]
+
+  @@index([userId, updatedAt])
+  @@index([orgId, updatedAt])
+}
+
+model AiChatMessage {
+  id             String        @id @default(cuid())
+  sessionId      String
+  session        AiChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  role           String        // user | assistant
+  content        String        @db.Text
+  toolTrace      Json          @default("[]")
+  structuredData Json?
+  actions        Json          @default("[]")
+  model          String?
+  latencyMs      Int?
+  createdAt      DateTime      @default(now())
+
+  @@index([sessionId, createdAt])
 }

@@ -22,10 +22,12 @@ import {
   TraceCodeStatus,
   TraceEventType,
 } from '@lumina/shared-types';
-import { extractTokenFromScanInput } from '@lumina/trace-crypto';
 import { PrismaService } from '../../common/prisma.module';
 import { EventsGateway } from '../../common/events.module';
 import { AuthUser, CurrentUser } from '../../common/auth.decorators';
+import { normalizeScanCode } from '../../common/code-normalize';
+import { PageQuery, parsePagination } from '../../common/pagination';
+import { CrmModule, CrmService } from '../crm/crm.module';
 
 function makeDocNo(prefix: string): string {
   const now = new Date();
@@ -39,13 +41,33 @@ export class OrderService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly events: EventsGateway,
+    private readonly crm: CrmService,
   ) {}
 
   // ======================== Purchase Orders ========================
 
-  async listPurchaseOrders(user: AuthUser) {
+  async listPurchaseOrders(user: AuthUser, pq?: PageQuery) {
+    const where = user.orgType === 'HQ' ? {} : { orgId: user.orgId };
+    const pg = parsePagination(pq, 20);
+    if (pg.enabled) {
+      const [total, items] = await Promise.all([
+        this.prisma.purchaseOrder.count({ where }),
+        this.prisma.purchaseOrder.findMany({
+          where,
+          include: {
+            supplier: true,
+            warehouse: true,
+            items: { include: { product: { include: { brand: true } } } },
+          },
+          orderBy: { createdAt: 'desc' },
+          skip: pg.skip,
+          take: pg.pageSize,
+        }),
+      ]);
+      return { items, total, page: pg.page, pageSize: pg.pageSize };
+    }
     return this.prisma.purchaseOrder.findMany({
-      where: user.orgType === 'HQ' ? {} : { orgId: user.orgId },
+      where,
       include: {
         supplier: true,
         warehouse: true,
@@ -69,9 +91,23 @@ export class OrderService {
     if (!body.supplierId || !body.warehouseId || !body.items?.length) {
       throw new BadRequestException('供应商、仓库和商品明细不能为空');
     }
+    if (body.paidAmount !== undefined && (!Number.isFinite(Number(body.paidAmount)) || Number(body.paidAmount) < 0)) {
+      throw new BadRequestException('实付金额不能为负数');
+    }
     let totalAmount = 0;
     const itemCreates = body.items.map((it) => {
+      const qty = Number(it.qty);
+      const unitPrice = Number(it.unitPrice);
       const disc = it.discountPercent ?? 100;
+      if (!Number.isInteger(qty) || qty <= 0 || qty > 100000) {
+        throw new BadRequestException('采购商品数量必须为 1~100000 之间的正整数');
+      }
+      if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+        throw new BadRequestException('采购单价必须为大于等于 0 的有效数字');
+      }
+      if (!Number.isFinite(Number(disc)) || Number(disc) < 0 || Number(disc) > 100) {
+        throw new BadRequestException('采购折扣必须在 0%~100% 之间');
+      }
       const lineAmount = Number((it.qty * it.unitPrice * (disc / 100)).toFixed(2));
       totalAmount += lineAmount;
       return {
@@ -143,23 +179,56 @@ export class OrderService {
     });
   }
 
-  async listSalesOrders(user: AuthUser, filter?: { status?: string; scene?: string }) {
+  async listSalesOrders(
+    user: AuthUser,
+    filter?: { status?: string; scene?: string; keyword?: string; page?: string; pageSize?: string },
+  ) {
     const where: Record<string, unknown> = {};
     if (user.orgType !== 'HQ') {
       where.OR = [{ sellerOrgId: user.orgId }, { buyerOrgId: user.orgId }];
     }
-    if (filter?.status) where.status = filter.status;
+    if (filter?.status) {
+      const statuses = filter.status.split(',').map((s) => s.trim()).filter(Boolean);
+      where.status = statuses.length > 1 ? { in: statuses } : statuses[0];
+    }
     if (filter?.scene) where.orderScene = filter.scene;
+    if (filter?.keyword?.trim()) {
+      const kw = filter.keyword.trim();
+      where.AND = [
+        {
+          OR: [
+            { docNo: { contains: kw, mode: 'insensitive' } },
+            { buyerOrg: { name: { contains: kw, mode: 'insensitive' } } },
+            { clinic: { name: { contains: kw, mode: 'insensitive' } } },
+          ],
+        },
+      ];
+    }
 
+    const pg = parsePagination(filter, 20);
+    const include = {
+      sellerOrg: { select: { id: true, name: true, code: true } },
+      buyerOrg: { select: { id: true, name: true, code: true } },
+      clinic: { select: { id: true, name: true, city: true, arrearsAmount: true } },
+      warehouse: { select: { id: true, name: true, code: true } },
+      items: { include: { product: { include: { brand: true } } } },
+    };
+    if (pg.enabled) {
+      const [total, items] = await Promise.all([
+        this.prisma.salesOrder.count({ where }),
+        this.prisma.salesOrder.findMany({
+          where,
+          include,
+          orderBy: { createdAt: 'desc' },
+          skip: pg.skip,
+          take: pg.pageSize,
+        }),
+      ]);
+      return { items, total, page: pg.page, pageSize: pg.pageSize };
+    }
     return this.prisma.salesOrder.findMany({
       where,
-      include: {
-        sellerOrg: { select: { id: true, name: true, code: true } },
-        buyerOrg: { select: { id: true, name: true, code: true } },
-        clinic: { select: { id: true, name: true, city: true, arrearsAmount: true } },
-        warehouse: { select: { id: true, name: true, code: true } },
-        items: { include: { product: { include: { brand: true } } } },
-      },
+      include,
       orderBy: { createdAt: 'desc' },
     });
   }
@@ -262,6 +331,29 @@ export class OrderService {
     if (!body.warehouseId || !body.items?.length) {
       throw new BadRequestException('出库仓库与商品明细不能为空');
     }
+    if (body.roundingAmount !== undefined && (!Number.isFinite(Number(body.roundingAmount)) || Number(body.roundingAmount) < 0)) {
+      throw new BadRequestException('抹零金额不能为负数');
+    }
+    if (body.otherFee !== undefined && (!Number.isFinite(Number(body.otherFee)) || Number(body.otherFee) < 0)) {
+      throw new BadRequestException('其他费用不能为负数');
+    }
+    if (body.paidAmount !== undefined && (!Number.isFinite(Number(body.paidAmount)) || Number(body.paidAmount) < 0)) {
+      throw new BadRequestException('已收金额不能为负数');
+    }
+    for (const it of body.items) {
+      const qty = Number(it.qty);
+      const unitPrice = Number(it.unitPrice);
+      const disc = Number(it.discountPercent);
+      if (!Number.isInteger(qty) || qty <= 0 || qty > 100000) {
+        throw new BadRequestException('商品数量必须为 1~100000 之间的正整数');
+      }
+      if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+        throw new BadRequestException('商品单价必须为大于等于 0 的有效数字');
+      }
+      if (!it.isGift && (!Number.isFinite(disc) || disc < 0 || disc > 100)) {
+        throw new BadRequestException('商品折扣必须在 0%~100% 之间');
+      }
+    }
 
     const sellerOrg = await this.prisma.organization.findUnique({ where: { id: user.orgId } });
     if (sellerOrg?.supplyFrozen) {
@@ -318,7 +410,8 @@ export class OrderService {
     const pMap = new Map(products.map((p) => [p.id, p]));
 
     const itemCreates = body.items.map((it) => {
-      const p = pMap.get(it.productId)!;
+      const p = pMap.get(it.productId);
+      if (!p) throw new BadRequestException(`商品不存在（${it.productId}）`);
       const lineAmount = it.isGift
         ? 0
         : Number((it.qty * it.unitPrice * (it.discountPercent / 100)).toFixed(2));
@@ -395,6 +488,21 @@ export class OrderService {
       });
     }
 
+    // Auto-convert prospect clinic to existing client when order is approved (PENDING_OUTBOUND) or paid
+    if (
+      order.orderScene === OrderScene.DEALER_TO_CLINIC &&
+      order.clinicId &&
+      (status === SalesOrderStatus.PENDING_OUTBOUND || paidAmount > 0)
+    ) {
+      await this.crm.promoteClinicToExisting(order.clinicId, {
+        orderId: order.id,
+        orderDocNo: order.docNo,
+        bizDate: order.bizDate,
+        operator: user,
+        reason: paidAmount > 0 ? '首单付款自动转为老客' : '供货单提交审核通过自动转为老客',
+      });
+    }
+
     if (!redline.passed && !body.asDraft) {
       const alert = await this.prisma.antiFleeingAlert.create({
         data: {
@@ -436,7 +544,7 @@ export class OrderService {
     const order = await this.prisma.salesOrder.findUnique({ where: { id } });
     if (!order) throw new NotFoundException('订单不存在');
 
-    return this.prisma.salesOrder.update({
+    const updated = await this.prisma.salesOrder.update({
       where: { id },
       data: {
         status: body.approve ? SalesOrderStatus.PENDING_OUTBOUND : SalesOrderStatus.CANCELLED,
@@ -445,9 +553,30 @@ export class OrderService {
         specialApproveReason: body.reason || (body.approve ? '总部特批放行' : '破价驳回'),
       },
     });
+
+    if (
+      body.approve &&
+      updated.orderScene === OrderScene.DEALER_TO_CLINIC &&
+      updated.clinicId
+    ) {
+      await this.crm.promoteClinicToExisting(updated.clinicId, {
+        orderId: updated.id,
+        orderDocNo: updated.docNo,
+        bizDate: updated.bizDate,
+        operator: user,
+        reason: '总部特批审核通过自动转为老客',
+      });
+    }
+
+    return updated;
   }
 
-  async incrementPrintCount(id: string) {
+  async incrementPrintCount(user: AuthUser, id: string) {
+    const order = await this.prisma.salesOrder.findUnique({ where: { id } });
+    if (!order) throw new NotFoundException('销售单不存在');
+    if (user.orgType !== 'HQ' && order.sellerOrgId !== user.orgId && order.buyerOrgId !== user.orgId) {
+      throw new ForbiddenException('无权操作其他主体的销售单');
+    }
     return this.prisma.salesOrder.update({
       where: { id },
       data: { printCount: { increment: 1 } },
@@ -456,9 +585,28 @@ export class OrderService {
 
   // ======================== Sales Return Orders (Code Re-entry) ========================
 
-  async listReturnOrders(user: AuthUser) {
+  async listReturnOrders(user: AuthUser, pq?: PageQuery) {
+    const where = user.orgType === 'HQ' ? {} : { orgId: user.orgId };
+    const pg = parsePagination(pq, 20);
+    if (pg.enabled) {
+      const [total, items] = await Promise.all([
+        this.prisma.returnOrder.count({ where }),
+        this.prisma.returnOrder.findMany({
+          where,
+          include: {
+            warehouse: true,
+            clinic: true,
+            items: { include: { product: true } },
+          },
+          orderBy: { createdAt: 'desc' },
+          skip: pg.skip,
+          take: pg.pageSize,
+        }),
+      ]);
+      return { items, total, page: pg.page, pageSize: pg.pageSize };
+    }
     return this.prisma.returnOrder.findMany({
-      where: user.orgType === 'HQ' ? {} : { orgId: user.orgId },
+      where,
       include: {
         warehouse: true,
         clinic: true,
@@ -482,7 +630,7 @@ export class OrderService {
     const cleanTokens = Array.from(
       new Set(
         (body.codeInputs || [])
-          .map((c) => extractTokenFromScanInput(c))
+          .map((c) => normalizeScanCode(c))
           .filter((x): x is string => Boolean(x)),
       ),
     );
@@ -490,11 +638,23 @@ export class OrderService {
       throw new BadRequestException('退货回仓必须指定仓库并扫描原单品防伪码');
     }
 
+    if (
+      body.unitPriceOverride !== undefined &&
+      (!Number.isFinite(Number(body.unitPriceOverride)) || Number(body.unitPriceOverride) < 0)
+    ) {
+      throw new BadRequestException('退货单价不能为负数');
+    }
     const wh = await this.prisma.warehouse.findUnique({
       where: { id: body.warehouseId },
       include: { org: true },
     });
     if (!wh) throw new NotFoundException('目标退回仓库不存在');
+    if (user.orgType !== 'HQ' && wh.orgId !== user.orgId) {
+      throw new ForbiddenException('无权向其他主体的仓库办理退货入库');
+    }
+
+    const targetStatus =
+      wh.org.type === 'HQ' ? TraceCodeStatus.IN_HQ_STOCK : TraceCodeStatus.IN_DEALER_STOCK;
 
     const codes = await this.prisma.traceCode.findMany({
       where: { codeToken: { in: cleanTokens } },
@@ -508,13 +668,11 @@ export class OrderService {
       if (c.codeLevel !== TraceCodeLevel.UNIT) {
         throw new BadRequestException(`退货请逐盒扫描单品码（${c.codeToken} 为外箱码）`);
       }
-      if (c.status === TraceCodeStatus.IN_HQ_STOCK || c.status === TraceCodeStatus.IN_DEALER_STOCK) {
-        throw new BadRequestException(`单品码 ${c.codeToken} 当前已在库中，请勿重复退货`);
+      if (c.status === targetStatus && c.currentWarehouseId === wh.id) {
+        throw new BadRequestException(`单品码 ${c.codeToken} 当前已在目标仓库中，请勿重复退货`);
       }
     }
 
-    const targetStatus =
-      wh.org.type === 'HQ' ? TraceCodeStatus.IN_HQ_STOCK : TraceCodeStatus.IN_DEALER_STOCK;
     const eventType =
       wh.org.type === 'HQ' ? TraceEventType.RETURN_TO_HQ : TraceEventType.RETURN_TO_DEALER;
 
@@ -626,8 +784,12 @@ export class OrderController {
   constructor(private readonly orderService: OrderService) {}
 
   @Get('purchase-orders')
-  listPurchase(@CurrentUser() user: AuthUser) {
-    return this.orderService.listPurchaseOrders(user);
+  listPurchase(
+    @CurrentUser() user: AuthUser,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    return this.orderService.listPurchaseOrders(user, { page, pageSize });
   }
 
   @Post('purchase-orders')
@@ -662,8 +824,11 @@ export class OrderController {
     @CurrentUser() user: AuthUser,
     @Query('status') status?: string,
     @Query('scene') scene?: string,
+    @Query('keyword') keyword?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
   ) {
-    return this.orderService.listSalesOrders(user, { status, scene });
+    return this.orderService.listSalesOrders(user, { status, scene, keyword, page, pageSize });
   }
 
   @Get('sales-orders/:id/codes')
@@ -712,13 +877,17 @@ export class OrderController {
   }
 
   @Post('sales-orders/:id/print-log')
-  printLog(@Param('id') id: string) {
-    return this.orderService.incrementPrintCount(id);
+  printLog(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.orderService.incrementPrintCount(user, id);
   }
 
   @Get('return-orders')
-  listReturns(@CurrentUser() user: AuthUser) {
-    return this.orderService.listReturnOrders(user);
+  listReturns(
+    @CurrentUser() user: AuthUser,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    return this.orderService.listReturnOrders(user, { page, pageSize });
   }
 
   @Post('return-orders')
@@ -739,6 +908,7 @@ export class OrderController {
 }
 
 @Module({
+  imports: [CrmModule],
   controllers: [OrderController],
   providers: [OrderService],
   exports: [OrderService],

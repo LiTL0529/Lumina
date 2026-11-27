@@ -2,10 +2,8 @@
   <div class="page">
     <div class="page-header">
       <div>
-        <h1 class="page-title">扫码入库</h1>
-        <p class="page-subtitle">
-          库管在电脑前用扫码枪直接扫，不用点输入框。扫外箱码一次按箱规整箱入库，扫盒码则单盒入库；入库完成后，每一盒的状态、批次、所在仓库都可查。
-        </p>
+        <h1 class="page-title">扫码入库建档</h1>
+        <p class="page-subtitle">扫码建档入库、系统防伪码入库与采购单管理</p>
       </div>
       <div class="page-actions">
         <el-button v-if="auth.isHQ" @click="poDialog = true">新增采购单</el-button>
@@ -21,22 +19,30 @@
               <button
                 v-if="auth.isHQ"
                 type="button"
-                :class="{ on: scanMode === 'HQ_INBOUND' }"
-                @click="scanMode = 'HQ_INBOUND'"
+                :class="{ on: scanMode === 'REGISTER_INBOUND' }"
+                @click="switchScanMode('REGISTER_INBOUND')"
               >
-                总仓 · 工厂到货
+                扫码建档入库
+              </button>
+              <button
+                v-if="auth.isHQ"
+                type="button"
+                :class="{ on: scanMode === 'HQ_INBOUND' }"
+                @click="switchScanMode('HQ_INBOUND')"
+              >
+                系统防伪码 · 入库
               </button>
               <button
                 type="button"
                 :class="{ on: scanMode === 'DEALER_INBOUND' }"
-                @click="scanMode = 'DEALER_INBOUND'"
+                @click="switchScanMode('DEALER_INBOUND')"
               >
-                服务商 · 收货
+                代理商 · 扫码收货
               </button>
             </div>
 
             <div class="toolbar-fields">
-              <el-select v-model="scanWarehouseId" style="width: 230px" placeholder="入库仓库">
+              <el-select v-model="scanWarehouseId" class="toolbar-select" placeholder="入库仓库">
                 <el-option
                   v-for="w in warehouses"
                   :key="w.id"
@@ -45,10 +51,10 @@
                 />
               </el-select>
               <el-select
-                v-if="scanMode === 'HQ_INBOUND'"
+                v-if="scanMode === 'HQ_INBOUND' || scanMode === 'REGISTER_INBOUND'"
                 v-model="selectedPoId"
                 clearable
-                style="width: 230px"
+                class="toolbar-select"
                 placeholder="关联采购单（可选）"
               >
                 <el-option
@@ -61,17 +67,54 @@
             </div>
           </div>
 
+          <!-- 扫码建档入库专用商品与批次配置 -->
+          <div v-if="scanMode === 'REGISTER_INBOUND'" class="register-bar">
+            <div class="rb-field">
+              <span class="rb-label">建档商品</span>
+              <el-select v-model="registerProductId" class="rb-select" placeholder="选择对应商品">
+                <el-option
+                  v-for="p in products"
+                  :key="p.id"
+                  :label="`${p.name}（${p.skuCode} · ${p.spec || '标准'}）`"
+                  :value="p.id"
+                />
+              </el-select>
+            </div>
+            <div class="rb-field">
+              <span class="rb-label">生产批次</span>
+              <el-input
+                v-model="registerBatchNo"
+                class="rb-input"
+                clearable
+                placeholder="留空按当日自动生成"
+              />
+            </div>
+            <div class="rb-field">
+              <span class="rb-label">码级别</span>
+              <el-select v-model="registerCodeLevel" class="rb-select-sm">
+                <el-option label="单品盒码" value="UNIT" />
+                <el-option label="外箱码" value="CARTON" />
+              </el-select>
+            </div>
+          </div>
+
           <!-- 扫描台 -->
           <div class="stage">
             <div class="stage-head">
-              <span class="stage-title">扫码口</span>
-              <span class="stage-sub">USB 扫码枪免点击盲扫 · 也可手工粘贴后回车</span>
+              <span class="stage-title">{{ scanMode === 'REGISTER_INBOUND' ? '入库建档扫码口' : '扫码口' }}</span>
+              <div class="stage-head-right">
+                <span class="stage-sub">USB 扫码枪免点击盲扫 · 或手工输入防伪码回车录入</span>
+              </div>
             </div>
             <input
               ref="scanRef"
               v-model="scanInput"
               class="stage-input mono"
-              placeholder="扫描外箱码 / 单品盒码"
+              :placeholder="
+                scanMode === 'REGISTER_INBOUND'
+                  ? '扫描产品包装条码 / 二维码（新码直接建档入库）'
+                  : '扫描外箱码 / 单品盒码'
+              "
               autocomplete="off"
               spellcheck="false"
               @keyup.enter="handleManualScan"
@@ -79,8 +122,16 @@
             <div class="stage-foot">
               <span class="kbd-hint"><kbd>Enter</kbd> 校验加入</span>
               <span class="kbd-hint"><kbd>F2</kbd> 清空本次</span>
-              <span class="kbd-hint"><kbd>F4</kbd> 确认入库</span>
-              <span class="stage-mode">{{ scanMode === 'HQ_INBOUND' ? '整箱按箱规自动展开' : '仅可收本主体待收货码' }}</span>
+              <span class="kbd-hint"><kbd>F4</kbd> {{ scanMode === 'REGISTER_INBOUND' ? '确认建档入库' : '确认入库' }}</span>
+              <span class="stage-mode">
+                {{
+                  scanMode === 'REGISTER_INBOUND'
+                    ? '扫描任意新产品码，自动建档并入库留痕'
+                    : scanMode === 'HQ_INBOUND'
+                      ? '整箱按箱规自动展开'
+                      : '仅可收本代理商待收货码'
+                }}
+              </span>
             </div>
           </div>
 
@@ -92,14 +143,23 @@
                 <div class="ls-title">{{ lastScan.ok ? lastScan.productName : lastScan.message }}</div>
                 <div class="ls-meta">
                   <template v-if="lastScan.ok">
-                    <span class="mono">{{ lastScan.token }}</span>
-                    <span>批次 {{ lastScan.batchNo }}</span>
-                    <span>{{ lastScan.codeLevel === 'CARTON' ? '外箱' : '单盒' }}</span>
+                    <span v-if="lastScan.token" class="mono">{{ lastScan.token }}</span>
+                    <span v-if="lastScan.batchNo">批次 {{ lastScan.batchNo }}</span>
+                    <span v-if="lastScan.codeLevel">{{ lastScan.codeLevel === 'CARTON' ? '外箱' : '单盒' }}</span>
                     <span class="ls-qty">+{{ lastScan.unitCount }} 盒</span>
                   </template>
                   <template v-else>该码未加入本次入库，请核对仓库与码状态</template>
                 </div>
               </div>
+              <el-button
+                v-if="lastRegisteredBatch && lastScan.plain"
+                size="small"
+                type="primary"
+                plain
+                @click="qrPrintDialog = true"
+              >
+                打印本批二维码（A4）
+              </el-button>
               <div class="ls-time mono">{{ lastScan.time }}</div>
             </template>
             <template v-else>
@@ -160,7 +220,7 @@
                 :loading="submittingScan"
                 @click="submitInbound"
               >
-                确认入库
+                {{ scanMode === 'REGISTER_INBOUND' ? '确认建档并入库' : '确认入库' }}
               </el-button>
             </div>
           </div>
@@ -170,19 +230,19 @@
       <el-tab-pane label="采购单据" name="list">
         <div class="surface-card flush">
           <el-table :data="purchaseOrders" size="small" empty-text="暂无采购单">
-            <el-table-column prop="docNo" label="采购单号" width="150">
+            <el-table-column prop="docNo" label="采购单号" width="138">
               <template #default="{ row }"><span class="mono">{{ row.docNo }}</span></template>
             </el-table-column>
-            <el-table-column label="业务日期" width="110">
+            <el-table-column label="业务日期" width="96">
               <template #default="{ row }"><span class="muted">{{ row.bizDate?.slice(0, 10) }}</span></template>
             </el-table-column>
-            <el-table-column label="供应商" width="190">
+            <el-table-column label="供应商" min-width="136" show-overflow-tooltip>
               <template #default="{ row }">{{ row.supplier?.name }}</template>
             </el-table-column>
-            <el-table-column label="入库仓库" width="150">
+            <el-table-column label="入库仓库" width="124" show-overflow-tooltip>
               <template #default="{ row }">{{ row.warehouse?.name }}</template>
             </el-table-column>
-            <el-table-column label="商品明细" min-width="240">
+            <el-table-column label="商品明细" min-width="176" show-overflow-tooltip>
               <template #default="{ row }">
                 <div v-for="it in row.items" :key="it.id" class="po-line">
                   {{ it.product.name }} × {{ it.qty }}
@@ -190,10 +250,10 @@
                 </div>
               </template>
             </el-table-column>
-            <el-table-column label="金额" width="110" align="right">
+            <el-table-column label="金额" width="98" align="right">
               <template #default="{ row }"><span class="mono">¥{{ Number(row.totalAmount).toFixed(2) }}</span></template>
             </el-table-column>
-            <el-table-column label="状态" width="110">
+            <el-table-column label="状态" width="82">
               <template #default="{ row }">
                 <span class="state-dot" :class="row.status === 'COMPLETED' ? 'done' : 'open'">
                   {{ row.status === 'COMPLETED' ? '已入库' : '待入库' }}
@@ -201,13 +261,23 @@
               </template>
             </el-table-column>
           </el-table>
+          <div class="table-pager">
+            <el-pagination
+              background
+              layout="total, prev, pager, next"
+              :total="poTotal"
+              :page-size="poPageSize"
+              :current-page="poPage"
+              @current-change="(p: number) => loadPurchaseOrders(p)"
+            />
+          </div>
         </div>
       </el-tab-pane>
     </el-tabs>
 
-    <el-dialog v-model="poDialog" title="新增采购单" width="680px">
-      <el-form :model="poForm" label-width="95px">
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px">
+    <el-dialog v-model="poDialog" title="新增采购单" width="min(680px, 94vw)" align-center>
+      <el-form :model="poForm" :label-width="isMobile ? 'auto' : '95px'" :label-position="isMobile ? 'top' : 'right'">
+        <div class="po-grid-2">
           <el-form-item label="供应商" required>
             <el-select v-model="poForm.supplierId" style="width: 100%">
               <el-option v-for="s in suppliers" :key="s.id" :label="s.name" :value="s.id" />
@@ -221,16 +291,12 @@
         </div>
         <el-form-item label="采购明细" required>
           <div style="width: 100%; display: flex; flex-direction: column; gap: 8px">
-            <div
-              v-for="(it, idx) in poForm.items"
-              :key="idx"
-              style="display: grid; grid-template-columns: 2fr 1fr 1fr auto; gap: 8px"
-            >
+            <div v-for="(it, idx) in poForm.items" :key="idx" class="po-item-row">
               <el-select v-model="it.productId" placeholder="商品" @change="onSelectPoProduct(it)">
                 <el-option v-for="p in products" :key="p.id" :label="`${p.name} (${p.skuCode})`" :value="p.id" />
               </el-select>
-              <el-input-number v-model="it.qty" :min="1" placeholder="数量" style="width: 100%" />
-              <el-input-number v-model="it.unitPrice" :min="0" :precision="2" placeholder="进价" style="width: 100%" />
+              <el-input-number v-model="it.qty" :min="1" placeholder="数量" style="width: 100%" controls-position="right" />
+              <el-input-number v-model="it.unitPrice" :min="0" :precision="2" placeholder="进价" style="width: 100%" controls-position="right" />
               <el-button link type="danger" @click="poForm.items.splice(idx, 1)">删</el-button>
             </div>
             <el-button
@@ -252,6 +318,14 @@
         <el-button type="primary" @click="createPo">保存采购单</el-button>
       </template>
     </el-dialog>
+
+    <QrLabelPrintModal
+      v-model="qrPrintDialog"
+      :batch-no="lastRegisteredBatch?.batchNo"
+      :product-name="lastRegisteredBatch?.productName"
+      :sku-code="lastRegisteredBatch?.skuCode"
+      :codes="lastRegisteredBatch?.codes || []"
+    />
   </div>
 </template>
 
@@ -260,18 +334,29 @@ import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { api } from '../utils/api';
 import { useAuthStore } from '../stores/auth';
+import { useViewport } from '../utils/format';
 import { playScanBeep, speakWarehouseVoice, useBarcodeScanner } from '../composables/useBarcodeScanner';
+import QrLabelPrintModal from '../components/QrLabelPrintModal.vue';
 
 const auth = useAuthStore();
+const { width } = useViewport();
+const isMobile = computed(() => width.value <= 720);
 const activeTab = ref('scan');
-const scanMode = ref<'HQ_INBOUND' | 'DEALER_INBOUND'>(auth.isHQ ? 'HQ_INBOUND' : 'DEALER_INBOUND');
+const scanMode = ref<'REGISTER_INBOUND' | 'HQ_INBOUND' | 'DEALER_INBOUND'>(
+  auth.isHQ ? 'REGISTER_INBOUND' : 'DEALER_INBOUND',
+);
 const scanWarehouseId = ref('');
 const selectedPoId = ref('');
+const registerProductId = ref('');
+const registerBatchNo = ref('');
+const registerCodeLevel = ref<'UNIT' | 'CARTON'>('UNIT');
 const scanInput = ref('');
 const scanRef = ref<HTMLInputElement | null>(null);
 const scannedItems = ref<any[]>([]);
 const submittingScan = ref(false);
 const lastScan = ref<any>(null);
+const qrPrintDialog = ref(false);
+const lastRegisteredBatch = ref<any>(null);
 
 const purchaseOrders = ref<any[]>([]);
 const warehouses = ref<any[]>([]);
@@ -295,14 +380,24 @@ function stamp() {
   return new Date().toLocaleTimeString('zh-CN', { hour12: false });
 }
 
+const poPage = ref(1);
+const poPageSize = 20;
+const poTotal = ref(0);
+
+async function loadPurchaseOrders(page = poPage.value) {
+  poPage.value = page;
+  const res = (await api.get('/purchase-orders', { params: { page, pageSize: poPageSize } })) as any;
+  purchaseOrders.value = Array.isArray(res) ? res : res.items || [];
+  poTotal.value = Array.isArray(res) ? res.length : Number(res.total || 0);
+}
+
 async function loadData() {
-  const [pos, whs, sups, prods] = await Promise.all([
-    api.get('/purchase-orders'),
+  const [, whs, sups, prods] = await Promise.all([
+    loadPurchaseOrders(poPage.value),
     api.get('/warehouses'),
     api.get('/suppliers'),
     api.get('/products'),
   ]);
-  purchaseOrders.value = pos as unknown as any[];
   warehouses.value = whs as unknown as any[];
   suppliers.value = sups as unknown as any[];
   products.value = prods as unknown as any[];
@@ -311,9 +406,20 @@ async function loadData() {
     scanWarehouseId.value = warehouses.value[0].id;
     poForm.value.warehouseId = warehouses.value[0].id;
   }
+  if (products.value.length && !registerProductId.value) {
+    registerProductId.value = products.value[0].id;
+  }
   if (suppliers.value.length && !poForm.value.supplierId) {
     poForm.value.supplierId = suppliers.value[0].id;
   }
+}
+
+function switchScanMode(mode: 'REGISTER_INBOUND' | 'HQ_INBOUND' | 'DEALER_INBOUND') {
+  if (scanMode.value === mode) return;
+  scanMode.value = mode;
+  scannedItems.value = [];
+  lastScan.value = null;
+  setTimeout(() => scanRef.value?.focus(), 40);
 }
 
 onMounted(() => {
@@ -337,31 +443,91 @@ function hotkeys(e: KeyboardEvent) {
   }
 }
 
-async function processCode(raw: string) {
-  if (!raw.trim() || !scanWarehouseId.value) return;
-  const res = (await api.post('/stock/scan-validate', {
-    rawInput: raw.trim(),
-    mode: scanMode.value,
-    warehouseId: scanWarehouseId.value,
-  })) as any;
+const inFlightTokens = new Set<string>();
 
-  if (!res.ok) {
-    playScanBeep('error');
-    speakWarehouseVoice(res.message);
-    lastScan.value = { ok: false, message: res.message, time: stamp() };
-    ElMessage.error(res.message);
+function normalizeScanClient(raw: string): string {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  const m = s.match(/\/v\/([0-9A-Za-z]{16})(?:[/?#]|$)/i);
+  if (m) return m[1].toUpperCase();
+  return s.replace(/\s+/g, '').toUpperCase();
+}
+
+function findDuplicateReason(
+  list: any[],
+  token: string,
+  parentToken?: string | null,
+  childTokens?: string[],
+): string | null {
+  if (list.some((i) => i.token === token)) {
+    return `产品码 ${token} 已在待入库列表中，已自动去重`;
+  }
+  if (parentToken && list.some((i) => i.token === parentToken)) {
+    return `产品码 ${token} 所属外箱 ${parentToken} 已在待入库列表中，无需重复扫描`;
+  }
+  if (list.some((i) => Array.isArray(i.childTokens) && i.childTokens.includes(token))) {
+    return `产品码 ${token} 所属外箱已在待入库列表中，无需重复扫描`;
+  }
+  if (Array.isArray(childTokens) && childTokens.length) {
+    const hit = childTokens.find((ct) => list.some((i) => i.token === ct));
+    if (hit) {
+      return `外箱 ${token} 内的单品码 ${hit} 已在列表中，请勿箱盒混扫重复`;
+    }
+  }
+  return null;
+}
+
+async function processCode(raw: string) {
+  const norm = normalizeScanClient(raw);
+  if (!norm || !scanWarehouseId.value) return;
+  if (scanMode.value === 'REGISTER_INBOUND' && !registerProductId.value) {
+    ElMessage.warning('请先选择建档对应的商品');
     return;
   }
-  if (scannedItems.value.some((i) => i.token === res.token)) {
+  const preDup = findDuplicateReason(scannedItems.value, norm);
+  if (preDup) {
     playScanBeep('error');
-    lastScan.value = { ok: false, message: `防伪码 ${res.token} 已在待入库列表中`, time: stamp() };
-    ElMessage.warning(`防伪码 ${res.token} 已在待入库列表中`);
+    lastScan.value = { ok: false, message: preDup, time: stamp() };
+    ElMessage.warning(preDup);
     return;
   }
-  scannedItems.value.unshift(res);
-  playScanBeep('success');
-  lastScan.value = { ...res, ok: true, time: stamp() };
-  scanRef.value?.focus();
+  if (inFlightTokens.has(norm)) return;
+  inFlightTokens.add(norm);
+  try {
+    const res = (await api.post('/stock/scan-validate', {
+      rawInput: raw.trim(),
+      mode: scanMode.value,
+      warehouseId: scanWarehouseId.value,
+      ...(scanMode.value === 'REGISTER_INBOUND'
+        ? {
+            productId: registerProductId.value,
+            codeLevel: registerCodeLevel.value,
+            batchNo: registerBatchNo.value || undefined,
+          }
+        : {}),
+    })) as any;
+
+    if (!res.ok) {
+      playScanBeep('error');
+      speakWarehouseVoice(res.message);
+      lastScan.value = { ok: false, message: res.message, time: stamp() };
+      ElMessage.error(res.message);
+      return;
+    }
+    const postDup = findDuplicateReason(scannedItems.value, res.token, res.parentToken, res.childTokens);
+    if (postDup) {
+      playScanBeep('error');
+      lastScan.value = { ok: false, message: postDup, time: stamp() };
+      ElMessage.warning(postDup);
+      return;
+    }
+    scannedItems.value.unshift(res);
+    playScanBeep('success');
+    lastScan.value = { ...res, ok: true, time: stamp() };
+    scanRef.value?.focus();
+  } finally {
+    inFlightTokens.delete(norm);
+  }
 }
 
 async function handleManualScan() {
@@ -376,17 +542,46 @@ useBarcodeScanner((code) => {
 async function submitInbound() {
   submittingScan.value = true;
   try {
-    const res = (await api.post('/stock/inbound', {
-      mode: scanMode.value,
-      warehouseId: scanWarehouseId.value,
-      purchaseOrderId: selectedPoId.value || undefined,
-      codeInputs: scannedItems.value.map((i) => i.token),
-    })) as any;
-    playScanBeep('notify');
-    ElMessage.success(`扫码入库完成：${res.inboundUnitsCount} 盒，单号 ${res.stockDoc.docNo}`);
+    let res: any;
+    if (scanMode.value === 'REGISTER_INBOUND') {
+      res = await api.post('/stock/inbound-register', {
+        warehouseId: scanWarehouseId.value,
+        productId: registerProductId.value,
+        batchNo: registerBatchNo.value || undefined,
+        codeLevel: registerCodeLevel.value,
+        purchaseOrderId: selectedPoId.value || undefined,
+        codeInputs: scannedItems.value.map((i) => i.token),
+      });
+      playScanBeep('notify');
+      lastRegisteredBatch.value = {
+        batchNo: res.batchNo,
+        productName: res.productName || products.value.find((p) => p.id === registerProductId.value)?.name || '',
+        skuCode: res.skuCode || '',
+        codes: (res.registeredCodes || []).map((t: string) => ({
+          codeToken: t,
+          codeLevel: res.codeLevel || registerCodeLevel.value,
+        })),
+      };
+      ElMessage.success(
+        `扫码建档入库完成：${res.inboundUnitsCount} 件，批次 ${res.batchNo}，单号 ${res.stockDoc.docNo}`,
+      );
+    } else {
+      lastRegisteredBatch.value = null;
+      res = await api.post('/stock/inbound', {
+        mode: scanMode.value,
+        warehouseId: scanWarehouseId.value,
+        purchaseOrderId: selectedPoId.value || undefined,
+        codeInputs: scannedItems.value.map((i) => i.token),
+      });
+      playScanBeep('notify');
+      ElMessage.success(`扫码入库完成：${res.inboundUnitsCount} 盒，单号 ${res.stockDoc.docNo}`);
+    }
     lastScan.value = {
       ok: true,
-      productName: `入库完成 · ${res.inboundUnitsCount} 盒`,
+      productName:
+        scanMode.value === 'REGISTER_INBOUND'
+          ? `建档入库完成 · ${res.inboundUnitsCount} 件（批次 ${res.batchNo}）`
+          : `入库完成 · ${res.inboundUnitsCount} 盒`,
       batchNo: res.stockDoc.docNo,
       token: '',
       codeLevel: '',
@@ -466,40 +661,79 @@ async function createPo() {
   gap: 10px;
   flex-wrap: wrap;
 }
+.toolbar-select {
+  width: 220px;
+}
+.register-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  padding: 11px 18px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+}
+.rb-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.rb-label {
+  font-size: 12px;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.rb-select {
+  width: 240px;
+}
+.rb-input {
+  width: 185px;
+}
+.rb-select-sm {
+  width: 112px;
+}
+.po-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.po-item-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
 
 /* 扫描台 */
 .stage {
-  background: var(--dark);
-  padding: 20px 22px 16px;
+  background: #111827;
+  padding: 22px 24px 18px;
   position: relative;
 }
 .stage::after {
   content: '';
   position: absolute;
   inset: 0;
-  background-image: repeating-linear-gradient(
-    135deg,
-    transparent 0 14px,
-    rgba(255, 255, 255, 0.015) 14px 15px
-  );
+  background-image: none;
   pointer-events: none;
 }
 .stage-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 12px;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
   position: relative;
   z-index: 1;
 }
 .stage-title {
   font-size: 11px;
+  font-weight: 600;
   letter-spacing: 0.14em;
-  color: #7e9993;
+  color: #d1d5db;
 }
 .stage-sub {
-  font-size: 11px;
-  color: #5f7a74;
+  font-size: 11.5px;
+  color: #94a3b8;
 }
 
 .stage-input {
@@ -507,24 +741,25 @@ async function createPo() {
   z-index: 1;
   width: 100%;
   height: 56px;
-  border: 1px solid var(--dark-line);
-  background: var(--dark-2);
-  border-radius: 7px;
-  padding: 0 16px;
+  border: 1px solid #334155;
+  background: rgba(15, 23, 42, 0.72);
+  border-radius: 10px;
+  padding: 0 18px;
   font-size: 17px;
   letter-spacing: 0.08em;
-  color: var(--dark-ink);
+  color: #f8fafc;
   outline: none;
-  transition: border-color 0.15s ease, background 0.15s ease;
+  transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
 }
 .stage-input::placeholder {
-  color: #56706b;
+  color: #64748b;
   font-size: 15px;
   letter-spacing: 0.02em;
 }
 .stage-input:focus {
-  border-color: #3f7b71;
-  background: #142420;
+  border-color: #9ca3af;
+  background: rgba(15, 23, 42, 0.94);
+  box-shadow: none;
 }
 
 .stage-foot {
@@ -533,9 +768,9 @@ async function createPo() {
   display: flex;
   align-items: center;
   gap: 16px;
-  margin-top: 11px;
-  font-size: 10.5px;
-  color: #6b8580;
+  margin-top: 12px;
+  font-size: 11px;
+  color: #94a3b8;
   flex-wrap: wrap;
 }
 .kbd-hint {
@@ -545,16 +780,16 @@ async function createPo() {
 }
 kbd {
   font-family: var(--font-mono);
-  font-size: 9.5px;
-  background: rgba(255, 255, 255, 0.07);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 3px;
-  padding: 1px 4px;
-  color: #a7bdb8;
+  font-size: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: #cbd5e1;
 }
 .stage-mode {
   margin-left: auto;
-  color: #5f7a74;
+  color: #94a3b8;
 }
 
 /* 最近扫描 */
@@ -604,7 +839,7 @@ kbd {
 }
 .ls-title {
   font-size: 14.5px;
-  font-weight: 650;
+  font-weight: 600;
   color: var(--ink);
   letter-spacing: -0.01em;
 }
@@ -744,16 +979,52 @@ kbd {
 }
 
 @media (max-width: 720px) {
+  .desk-toolbar {
+    padding: 12px 14px;
+    gap: 10px;
+  }
+  .toolbar-fields,
+  .toolbar-select,
+  .rb-field,
+  .rb-select,
+  .rb-input,
+  .rb-select-sm {
+    width: 100%;
+  }
+  .register-bar {
+    padding: 10px 14px;
+  }
+  .rb-field {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+  .stage {
+    padding: 16px 14px 14px;
+  }
   .stage-input {
     font-size: 15px;
-    height: 50px;
+    height: 48px;
+  }
+  .desk-list {
+    padding: 4px 14px 8px;
   }
   .desk-foot {
     flex-direction: column;
     align-items: stretch;
+    padding: 12px 14px;
   }
   .foot-actions {
     justify-content: flex-end;
+  }
+  .po-grid-2 {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+  .po-item-row {
+    grid-template-columns: 1fr 1fr;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--line);
   }
 }
 </style>

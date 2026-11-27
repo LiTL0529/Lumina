@@ -83,6 +83,22 @@ describe('evaluateSupplyRedline (3.5折供货红线校验)', () => {
     expect(res.passed).toBe(false);
     expect(res.violations[0].scope).toBe('ORDER_COMPOSITE');
   });
+
+  it('rejects zero/negative quantity and discountPercent > 100', () => {
+    const negQty = evaluateSupplyRedline({
+      lines: [
+        { skuCode: 'SP001', productName: '养护油', qty: -5, retailPrice: 880, unitPrice: 880, discountPercent: 50 },
+      ],
+    });
+    expect(negQty.passed).toBe(false);
+
+    const overDisc = evaluateSupplyRedline({
+      lines: [
+        { skuCode: 'SP001', productName: '养护油', qty: 2, retailPrice: 880, unitPrice: 880, discountPercent: 150 },
+      ],
+    });
+    expect(overDisc.passed).toBe(false);
+  });
 });
 
 describe('buildClinicFingerprint', () => {
@@ -96,6 +112,20 @@ describe('buildClinicFingerprint', () => {
       name: '南昌妆典（有限公司）',
       cityCode: '360100',
       contactPhone: '138-0013-8000',
+    });
+    expect(a).toBe(b);
+  });
+
+  it('strips stacked beauty/company suffixes identically', () => {
+    const a = buildClinicFingerprint({
+      name: '南昌星耀皮肤管理中心',
+      cityCode: '南昌市',
+      contactPhone: '13800138999',
+    });
+    const b = buildClinicFingerprint({
+      name: '南昌星耀 皮肤管理中心有限公司',
+      cityCode: '南昌市',
+      contactPhone: '138-0013-8999',
     });
     expect(a).toBe(b);
   });

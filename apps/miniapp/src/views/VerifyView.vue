@@ -1,60 +1,73 @@
 <template>
-  <div class="phone-frame">
+  <div class="phone-frame canvas-white">
     <header class="verify-topbar">
-      <div class="brand-block">
-        <div class="brand-word">LUMINA</div>
-        <div class="brand-caption">官方一物一码防伪溯源</div>
+      <div class="brand-row">
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10" />
+            <path d="m9 12 2 2 4-4" />
+          </svg>
+        </div>
+        <div class="brand-block">
+          <div class="brand-word">LUMINA</div>
+          <div class="brand-caption">官方防伪溯源</div>
+        </div>
       </div>
-      <router-link to="/m/workbench" class="b2b-switch">销售工作台</router-link>
+      <router-link v-if="isNativeApp" to="/m/workbench" class="b2b-switch">返回工作台</router-link>
     </header>
 
     <div class="verify-body">
-      <!-- 手动查码 / 演示城市 -->
-      <div class="m-card search-card">
-        <div class="search-row">
-          <input
-            v-model="inputToken"
-            class="m-input mono"
-            placeholder="输入 16 位防伪码"
-            @keyup.enter="runVerify()"
-          />
-          <button class="search-btn" type="button" @click="runVerify()">查验</button>
-        </div>
-        <div class="city-row">
-          <span class="city-label">扫码所在地（演示跨区检测）</span>
-          <select v-model="simCity" class="city-select" @change="runVerify()">
-            <option value="南昌市">南昌市 · 授权区</option>
-            <option value="宜春市">宜春市 · 授权区</option>
-            <option value="杭州市">杭州市 · 跨区</option>
-            <option value="北京市">北京市 · 跨区</option>
-          </select>
-        </div>
+      <!-- 查码 -->
+      <div class="search-bar">
+        <input
+          v-model="inputToken"
+          class="m-input mono"
+          placeholder="输入 16 位防伪码"
+          @keyup.enter="runVerify()"
+        />
+        <button class="search-btn" type="button" @click="runVerify()">查验</button>
       </div>
 
-      <div v-if="loading" class="m-card loading-card">
+      <div v-if="loading" class="loading-card">
         <span class="spin" />
         正在进行签名与流向核验…
       </div>
 
       <template v-else-if="result">
         <!-- 结论 -->
-        <div class="verdict" :class="verdictClass">
+        <section class="verdict" :class="verdictClass">
           <div class="verdict-main">
-            <div class="verdict-line">{{ result.authentic ? '官方正品' : '查验未通过' }}</div>
+            <span class="verdict-pill">{{ result.authentic ? '官方正品' : '查验未通过' }}</span>
             <h1 class="verdict-title">{{ result.headline }}</h1>
             <p class="verdict-sub">{{ result.subMessage || result.message }}</p>
           </div>
-          <div class="verdict-seal" :class="result.authentic ? 'ok' : 'bad'">
-            <span>{{ result.authentic ? '已验真' : '异常' }}</span>
+          <div class="verdict-badge" :class="verdictClass" aria-hidden="true">
+            <svg v-if="result.authentic && verdictClass === 'authentic'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 6 9 17l-5-5" />
+            </svg>
+            <svg v-else-if="result.authentic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
+            </svg>
+            <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="m18 6-12 12" /><path d="m6 6 12 12" />
+            </svg>
           </div>
-        </div>
-        <div v-if="result.authentic" class="verdict-meta mono">
-          防伪码 {{ result.codeToken }} · 这是第 {{ result.verifySeq }} 次查验
-        </div>
+        </section>
+
+        <button
+          v-if="result.authentic"
+          type="button"
+          class="verdict-meta mono"
+          @click="copyCode(result.codeToken)"
+        >
+          <span>{{ formatCodeGroups(result.codeToken) }}</span>
+          <span class="meta-seq">第 {{ result.verifySeq }} 次查验</span>
+          <span v-if="copiedTip" class="copied-tip">已复制</span>
+        </button>
 
         <template v-if="result.authentic">
           <!-- 产品档案 -->
-          <section class="m-card profile-card">
+          <section class="v-section">
             <div class="m-kicker">产品身份档案</div>
             <div class="prod-name">{{ result.product.name }}</div>
             <div class="kv-grid">
@@ -74,37 +87,36 @@
               </div>
               <div class="kv-row">
                 <span>合规零售下限</span>
-                <strong class="mono">≥ ¥{{ result.product.minCompliantRetail.toFixed(2) }}（{{ result.product.retailRedlineFold }} 折红线）</strong>
+                <strong class="mono">≥ ¥{{ result.product.minCompliantRetail.toFixed(2) }}（{{ result.product.retailRedlineFold }} 折）</strong>
               </div>
             </div>
           </section>
 
           <!-- 渠道背书 -->
-          <section class="m-card endorse-card">
-            <div class="m-kicker endorse-kicker">官方授权渠道</div>
+          <section class="v-section">
+            <div class="m-kicker">官方授权渠道</div>
             <div class="dealer-title">{{ result.channelEndorsement.dealerName }}</div>
             <div class="region-chips" v-if="result.channelEndorsement.authorizedRegions?.length">
-              <span v-for="r in result.channelEndorsement.authorizedRegions" :key="r" class="region-chip">{{ r }}</span>
+              <span v-for="r in result.channelEndorsement.authorizedRegions" :key="r" class="m-chip">{{ r }}</span>
             </div>
             <div v-if="result.channelEndorsement.clinicName" class="clinic-row">
-              授权终端机构
-              <strong>{{ result.channelEndorsement.clinicName }}</strong>
+              授权终端机构 <strong>{{ result.channelEndorsement.clinicName }}</strong>
               <span v-if="result.channelEndorsement.clinicCity" class="muted">（{{ result.channelEndorsement.clinicCity }}）</span>
             </div>
             <div class="first-scan mono">
-              首次验证 {{ result.firstVerifyAt?.replace('T', ' ').slice(0, 16) }} · {{ result.firstVerifyCity }}
+              首次验证 {{ formatDateTime(result.firstVerifyAt) }} · {{ result.firstVerifyCity }}
             </div>
           </section>
 
           <!-- 延伸服务 -->
-          <section class="m-card extend-card">
+          <section class="v-section">
             <div class="m-kicker">院线护肤服务</div>
             <div class="extend-title">{{ result.extensions.usageGuideTitle }}</div>
             <p class="extend-desc">{{ result.extensions.postCareHint }}</p>
           </section>
 
           <!-- 核价举报 -->
-          <section class="m-card">
+          <section class="v-section">
             <div class="report-head">
               <div>
                 <div class="report-title">价格核验与举报</div>
@@ -122,7 +134,7 @@
               </div>
               <div class="m-field">
                 <label class="m-label">购买门店 / 渠道</label>
-                <input v-model="reportForm.storeName" class="m-input" placeholder="如：某美容会所 / 微商" />
+                <input v-model="reportForm.storeName" class="m-input" placeholder="如：某美容会所" />
               </div>
               <div class="m-field">
                 <label class="m-label">补充说明</label>
@@ -135,16 +147,38 @@
         </template>
       </template>
 
-      <div v-else class="m-card empty-card">
-        <div class="empty-title">扫描包装上的防伪二维码</div>
+      <div v-else class="empty-card">
+        <div class="empty-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 7V5a2 2 0 0 1 2-2h2" /><path d="M17 3h2a2 2 0 0 1 2 2v2" />
+            <path d="M21 17v2a2 2 0 0 1-2 2h-2" /><path d="M7 21H5a2 2 0 0 1-2-2v-2" />
+            <rect x="7" y="7" width="10" height="10" rx="1.5" />
+          </svg>
+        </div>
+        <div class="empty-title">扫描包装防伪二维码</div>
         <p class="empty-desc">
-          用微信扫一扫产品外盒的二维码即可验真，并看到供货服务商与授权机构。也可以在上方输入 16 位防伪码。
+          用微信扫一扫外盒二维码即可验真，也可在上方输入 16 位防伪码查验授权渠道。
         </p>
       </div>
 
+      <!-- 演示跨区检测折叠至页底 -->
+      <details class="city-demo">
+        <summary>跨区检测演示 · 当前模拟所在地：{{ simCity }}</summary>
+        <div class="city-demo-body">
+          <label class="m-label">切换模拟扫码城市</label>
+          <MobileSelect
+            v-model="simCity"
+            title="选择模拟扫码城市"
+            placeholder="请选择模拟城市"
+            :options="simCityOptions"
+            @change="runVerify()"
+          />
+        </div>
+      </details>
+
       <footer class="page-foot">
         <span class="mono">LUMINA · 一物一码</span>
-        <span>本页由品牌方直连数据</span>
+        <span>品牌方直连核验</span>
       </footer>
     </div>
   </div>
@@ -154,12 +188,39 @@
 import { computed, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { mApi } from '../utils/api';
+import { formatDateTime } from '../utils/format';
+import MobileSelect, { type MobileSelectOption } from '../components/MobileSelect.vue';
+
+const simCityOptions: MobileSelectOption[] = [
+  { value: '南昌市', label: '南昌市', badge: '授权区' },
+  { value: '宜春市', label: '宜春市', badge: '授权区' },
+  { value: '杭州市', label: '杭州市', badge: '跨区' },
+  { value: '北京市', label: '北京市', badge: '跨区' },
+];
 
 const route = useRoute();
+const isNativeApp =
+  typeof window !== 'undefined' && Boolean((window as any).Capacitor?.isNativePlatform?.());
 const inputToken = ref((route.params.token as string) || '');
 const simCity = ref('南昌市');
 const loading = ref(false);
 const result = ref<any>(null);
+const copiedTip = ref(false);
+
+function formatCodeGroups(token?: string | null) {
+  if (!token) return '—';
+  const clean = token.trim();
+  return clean.length === 16 ? clean.replace(/(.{4})(?=.)/g, '$1 ') : clean;
+}
+
+function copyCode(token?: string) {
+  if (!token) return;
+  navigator.clipboard?.writeText(token);
+  copiedTip.value = true;
+  setTimeout(() => {
+    copiedTip.value = false;
+  }, 1800);
+}
 
 const showReport = ref(false);
 const reportForm = ref({ paidPrice: 580, storeName: '', remark: '' });
@@ -206,93 +267,101 @@ onMounted(() => {
 
 <style scoped>
 .verify-topbar {
-  background: #101c1a;
-  color: #fff;
-  padding: 16px 18px 15px;
+  flex-shrink: 0;
+  background: #ffffff;
+  border-bottom: 1px solid var(--m-line);
+  padding: calc(11px + env(safe-area-inset-top)) 18px 11px;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
+}
+.brand-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.brand-mark {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: #111827;
+  color: #ffffff;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+.brand-mark svg {
+  width: 16px;
+  height: 16px;
 }
 .brand-word {
-  font-size: 15px;
+  font-size: 13.5px;
   font-weight: 700;
-  letter-spacing: 0.2em;
-  color: #eef4f1;
+  letter-spacing: 0.1em;
+  color: var(--m-ink);
+  line-height: 1.15;
 }
 .brand-caption {
-  font-size: 10.5px;
-  color: #7f9a94;
-  margin-top: 3px;
-  letter-spacing: 0.02em;
+  font-size: 11px;
+  color: var(--m-muted);
+  margin-top: 2px;
 }
 .b2b-switch {
-  font-size: 11.5px;
-  color: #cfe3dc;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--m-ink);
   text-decoration: none;
-  border: 1px solid rgba(207, 227, 220, 0.24);
-  padding: 5px 10px;
-  border-radius: 4px;
-}
-.verify-body {
-  padding: 14px 14px 30px;
-  flex: 1;
+  border: 1px solid var(--m-line-strong);
+  background: #ffffff;
+  min-height: 36px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 6px;
+  white-space: nowrap;
 }
 
-/* 查码 */
-.search-card {
-  padding: 14px;
+.verify-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 18px 18px calc(28px + env(safe-area-inset-bottom));
 }
-.search-row {
+
+.search-bar {
   display: flex;
   gap: 8px;
 }
 .search-btn {
   flex-shrink: 0;
-  border: 1px solid var(--m-primary);
-  background: var(--m-primary);
-  color: #fff;
-  border-radius: 7px;
+  border: 0;
+  background: #111827;
+  color: #ffffff;
+  border-radius: 6px;
   padding: 0 18px;
+  min-height: 42px;
   font-size: 13.5px;
   font-weight: 600;
   font-family: inherit;
   cursor: pointer;
 }
-.city-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: 10px;
-  gap: 10px;
-}
-.city-label {
-  font-size: 10.5px;
-  color: var(--m-muted);
-}
-.city-select {
-  border: 1px solid var(--m-line);
-  border-radius: 5px;
-  padding: 4px 6px;
-  font-size: 11.5px;
-  font-family: inherit;
-  background: var(--m-surface-2);
-  color: var(--m-sub);
-}
 
 .loading-card {
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 12.5px;
-  color: var(--m-sub);
-  padding: 28px 16px;
   justify-content: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--m-muted);
+  padding: 36px 0;
 }
 .spin {
-  width: 14px;
-  height: 14px;
-  border: 2px solid var(--m-primary-line);
-  border-top-color: var(--m-primary);
+  width: 15px;
+  height: 15px;
+  border: 2px solid var(--m-line-strong);
+  border-top-color: #111827;
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
@@ -306,104 +375,149 @@ onMounted(() => {
 .verdict {
   display: flex;
   align-items: flex-start;
-  gap: 12px;
-  border-radius: var(--m-radius);
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 20px;
   padding: 18px 16px;
+  border-radius: 10px;
   border: 1px solid var(--m-line);
-  background: #fff;
-  border-left-width: 3px;
-  margin-top: 12px;
+  background: #ffffff;
 }
 .verdict.authentic {
-  border-left-color: var(--m-primary);
-  background: linear-gradient(180deg, #f2f8f5 0%, #ffffff 70%);
+  border-color: var(--m-success-line);
+  background: var(--m-success-soft);
 }
 .verdict.warn {
-  border-left-color: var(--m-gold);
-  background: linear-gradient(180deg, #fdf7ea 0%, #ffffff 70%);
+  border-color: var(--m-gold-line);
+  background: var(--m-gold-soft);
 }
 .verdict.danger {
-  border-left-color: var(--m-seal);
-  background: linear-gradient(180deg, #fdf1ee 0%, #ffffff 70%);
+  border-color: var(--m-seal-line);
+  background: var(--m-seal-soft);
 }
 .verdict-main {
   flex: 1;
   min-width: 0;
 }
-.verdict-line {
-  font-size: 10.5px;
-  letter-spacing: 0.1em;
-  color: var(--m-muted);
+.verdict-pill {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--m-sub);
 }
-.verdict.authentic .verdict-line {
-  color: var(--m-primary);
+.verdict.authentic .verdict-pill {
+  color: var(--m-success);
 }
-.verdict.danger .verdict-line {
+.verdict.warn .verdict-pill {
+  color: var(--m-gold);
+}
+.verdict.danger .verdict-pill {
   color: var(--m-seal);
 }
 .verdict-title {
   margin: 6px 0 5px;
-  font-size: 19px;
+  font-size: 18px;
   line-height: 1.35;
-  font-weight: 700;
-  letter-spacing: -0.01em;
+  font-weight: 600;
+  color: var(--m-ink);
+  text-wrap: balance;
 }
 .verdict-sub {
   margin: 0;
   font-size: 12.5px;
-  line-height: 1.65;
+  line-height: 1.6;
   color: var(--m-sub);
+  text-wrap: pretty;
 }
-.verdict-seal {
+@media (max-width: 390px) {
+  .verdict {
+    gap: 10px;
+    padding: 15px 14px;
+  }
+  .verdict-title {
+    font-size: 16px;
+    letter-spacing: -0.01em;
+  }
+  .verdict-sub {
+    font-size: 12px;
+    line-height: 1.55;
+  }
+  .verdict-badge {
+    width: 32px;
+    height: 32px;
+  }
+}
+.verdict-badge {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
   flex-shrink: 0;
-  border: 1.5px solid currentColor;
-  border-radius: 3px;
-  padding: 2px;
-  transform: rotate(-6deg);
-  align-self: center;
+  color: #ffffff;
 }
-.verdict-seal span {
-  display: block;
-  border: 1px solid currentColor;
-  border-radius: 2px;
-  padding: 4px 5px;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
+.verdict-badge svg {
+  width: 19px;
+  height: 19px;
 }
-.verdict-seal.ok {
-  color: var(--m-primary);
+.verdict-badge.authentic {
+  background: var(--m-success);
 }
-.verdict-seal.bad {
-  color: var(--m-seal);
+.verdict-badge.warn {
+  background: var(--m-gold);
 }
-.verdict-meta {
-  font-size: 10.5px;
-  color: var(--m-muted);
-  margin: 8px 2px 0;
-  word-break: break-all;
+.verdict-badge.danger {
+  background: var(--m-seal);
 }
 
-/* 档案 */
-.profile-card {
-  margin-top: 12px;
+.verdict-meta {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--m-ink);
+  background: var(--m-surface-2);
+  border: 1px solid var(--m-line);
+  border-radius: 6px;
+  padding: 9px 12px;
+  margin-top: 10px;
+  cursor: pointer;
+}
+.meta-seq {
+  font-family: var(--m-font);
+  color: var(--m-muted);
+}
+.copied-tip {
+  color: var(--m-success);
+  font-family: var(--m-font);
+  font-weight: 600;
+}
+
+/* 留白分段（去框套框） */
+.v-section {
+  padding: 20px 0;
+  border-bottom: 1px solid var(--m-line);
 }
 .prod-name {
   font-size: 17px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  margin: 2px 0 12px;
+  font-weight: 600;
+  margin: 2px 0 14px;
+  color: var(--m-ink);
 }
 .kv-grid {
   display: flex;
   flex-direction: column;
-  gap: 9px;
+  gap: 10px;
 }
 .kv-row {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  font-size: 12.5px;
+  font-size: 13px;
 }
 .kv-row span {
   color: var(--m-muted);
@@ -413,53 +527,34 @@ onMounted(() => {
   text-align: right;
   font-weight: 500;
   color: var(--m-ink);
-  line-height: 1.5;
   min-width: 0;
   word-break: break-word;
 }
 .price-row {
   align-items: baseline;
   border-top: 1px solid var(--m-line);
-  padding-top: 9px;
+  padding-top: 10px;
   margin-top: 2px;
 }
 .price {
   font-size: 20px;
-  color: var(--m-ink);
   font-weight: 600;
-}
-
-/* 背书 */
-.endorse-card {
-  margin-top: 12px;
-  background: #fbfaf6;
-  border-color: #e6dfcd;
-}
-.endorse-kicker {
-  color: var(--m-gold);
+  color: var(--m-ink);
 }
 .dealer-title {
-  font-size: 15px;
-  font-weight: 650;
+  font-size: 15.5px;
+  font-weight: 600;
   color: var(--m-ink);
   margin-bottom: 8px;
 }
 .region-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px;
-  margin-bottom: 9px;
-}
-.region-chip {
-  font-size: 10.5px;
-  padding: 2px 7px;
-  border-radius: 3px;
-  border: 1px solid #dcc9a3;
-  background: #fdf8ee;
-  color: var(--m-gold);
+  gap: 6px;
+  margin-bottom: 10px;
 }
 .clinic-row {
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--m-sub);
   margin-bottom: 6px;
 }
@@ -470,29 +565,21 @@ onMounted(() => {
   color: var(--m-muted);
 }
 .first-scan {
-  font-size: 10.5px;
+  font-size: 11.5px;
   color: var(--m-muted);
 }
-
-/* 延伸 */
-.extend-card {
-  margin-top: 12px;
-  background: var(--m-primary-soft);
-  border-color: var(--m-primary-line);
-}
 .extend-title {
-  font-size: 14px;
-  font-weight: 650;
-  margin-bottom: 4px;
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--m-ink);
+  margin-bottom: 5px;
 }
 .extend-desc {
   margin: 0;
-  font-size: 12px;
+  font-size: 12.5px;
   line-height: 1.65;
-  color: var(--m-primary-dark);
+  color: var(--m-sub);
 }
-
-/* 核价 */
 .report-head {
   display: flex;
   justify-content: space-between;
@@ -500,29 +587,35 @@ onMounted(() => {
   gap: 12px;
 }
 .report-title {
-  font-size: 13.5px;
+  font-size: 14px;
   font-weight: 600;
+  color: var(--m-ink);
 }
 .report-desc {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--m-muted);
   line-height: 1.55;
   margin-top: 3px;
 }
 .report-toggle {
   border: 1px solid var(--m-line-strong);
-  background: #fff;
-  border-radius: 5px;
-  padding: 6px 11px;
+  background: #ffffff;
+  border-radius: 6px;
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 11px;
   font-size: 12px;
-  color: var(--m-sub);
+  font-weight: 500;
+  color: var(--m-ink);
   font-family: inherit;
   cursor: pointer;
   flex-shrink: 0;
 }
 .report-body {
-  margin-top: 12px;
-  padding-top: 12px;
+  margin-top: 14px;
+  padding-top: 14px;
   border-top: 1px solid var(--m-line);
 }
 .report-done {
@@ -532,27 +625,61 @@ onMounted(() => {
   font-weight: 600;
 }
 
-/* 空态 */
 .empty-card {
-  margin-top: 12px;
   text-align: center;
-  padding: 30px 20px;
+  padding: 52px 16px;
+}
+.empty-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: var(--m-surface-3);
+  color: var(--m-ink);
+  display: grid;
+  place-items: center;
+  margin: 0 auto 14px;
+}
+.empty-icon svg {
+  width: 22px;
+  height: 22px;
 }
 .empty-title {
-  font-size: 14.5px;
-  font-weight: 650;
+  font-size: 15.5px;
+  font-weight: 600;
+  color: var(--m-ink);
 }
 .empty-desc {
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--m-muted);
   line-height: 1.7;
   margin: 8px 0 0;
 }
+
+/* 折叠至页底的跨区城市演示 */
+.city-demo {
+  margin-top: 24px;
+  border: 1px solid var(--m-line);
+  border-radius: 8px;
+  background: var(--m-surface-2);
+  padding: 10px 12px;
+}
+.city-demo summary {
+  font-size: 12px;
+  color: var(--m-muted);
+  cursor: pointer;
+  list-style: none;
+}
+.city-demo-body {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--m-line);
+}
+
 .page-foot {
   display: flex;
   justify-content: space-between;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--m-muted);
-  padding: 18px 4px 0;
+  padding: 20px 2px 0;
 }
 </style>

@@ -1,0 +1,120 @@
+name: Lumina CI & Auto Deploy
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-lumina
+  cancel-in-progress: false
+
+jobs:
+  test-and-build:
+    name: Test & Build Monorepo
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run unit tests
+        run: |
+          pnpm --filter @lumina/shared-types test
+          pnpm --filter @lumina/trace-crypto test
+          pnpm --filter @lumina/print-templates test
+
+      - name: Build API, Web Admin & Miniapp
+        run: pnpm build
+
+  deploy:
+    name: Deploy to Production Server
+    needs: test-and-build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH & verify health (with auto-rollback)
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          PORT="${DEPLOY_PORT:-22}"
+          SSH_OPTS="-i ~/.ssh/deploy_key -p ${PORT} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o BatchMode=yes"
+
+          ssh ${SSH_OPTS} "${DEPLOY_USER}@${DEPLOY_HOST}" "GH_TOKEN='${GH_TOKEN}' GH_REPO='${GH_REPO}' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd /opt/lumina-beauty
+
+          echo "==> Backing up current dist bundles for rollback..."
+          rm -rf /tmp/lumina-prev-dist
+          mkdir -p /tmp/lumina-prev-dist
+          [ -d apps/api/dist ] && cp -a apps/api/dist /tmp/lumina-prev-dist/api-dist
+          [ -d apps/web-admin/dist ] && cp -a apps/web-admin/dist /tmp/lumina-prev-dist/web-admin-dist
+          [ -d apps/miniapp/dist ] && cp -a apps/miniapp/dist /tmp/lumina-prev-dist/miniapp-dist
+
+          rollback() {
+            echo "Deploy or healthcheck failed! Restoring previous dist bundles..." >&2
+            if [ -d /tmp/lumina-prev-dist/api-dist ]; then
+              rm -rf apps/api/dist && cp -a /tmp/lumina-prev-dist/api-dist apps/api/dist
+            fi
+            if [ -d /tmp/lumina-prev-dist/web-admin-dist ]; then
+              rm -rf apps/web-admin/dist && cp -a /tmp/lumina-prev-dist/web-admin-dist apps/web-admin/dist
+            fi
+            if [ -d /tmp/lumina-prev-dist/miniapp-dist ]; then
+              rm -rf apps/miniapp/dist && cp -a /tmp/lumina-prev-dist/miniapp-dist apps/miniapp/dist
+            fi
+            systemctl restart lumina-api.service || true
+          }
+          trap rollback ERR
+
+          echo "==> Pulling latest main from GitHub..."
+          git fetch --depth=20 "https://x-access-token:${GH_TOKEN}@github.com/${GH_REPO}.git" main
+          git reset --hard FETCH_HEAD
+
+          echo "==> Installing dependencies & building..."
+          pnpm install --frozen-lockfile
+          pnpm build
+
+          echo "==> Restarting lumina-api.service..."
+          systemctl restart lumina-api.service
+
+          OK=0
+          for i in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:3100/api/v1/auth/register-options >/dev/null 2>&1; then
+              OK=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$OK" != "1" ]; then
+            echo "ERROR: lumina-api did not become healthy within 20s" >&2
+            journalctl -u lumina-api.service -n 30 --no-pager >&2 || true
+            exit 1
+          fi
+
+          curl -fsS -o /dev/null https://jianxing-asean-ai.com/lumina/
+          trap - ERR
+          rm -rf /tmp/lumina-prev-dist
+          echo "==> Lumina deployed & verified healthy! Commit: $(git rev-parse --short HEAD)"
+          REMOTE

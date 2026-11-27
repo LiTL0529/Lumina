@@ -11,6 +11,7 @@ import {
 import { ClinicBindStatus, SalesOrderStatus, TraceCodeLevel } from '@lumina/shared-types';
 import { PrismaService } from '../../common/prisma.module';
 import { AuthUser, CurrentUser } from '../../common/auth.decorators';
+import { PageQuery, parsePagination } from '../../common/pagination';
 
 @Injectable()
 export class RebateService {
@@ -130,7 +131,7 @@ export class RebateService {
   /**
    * Multi-dimensional sales report matching 生意通 sales report tabs.
    */
-  async getSalesReport(user: AuthUser, groupBy: string = 'detail') {
+  async getSalesReport(user: AuthUser, groupBy: string = 'detail', pq?: PageQuery) {
     const orders = await this.prisma.salesOrder.findMany({
       where: {
         status: { not: SalesOrderStatus.CANCELLED },
@@ -195,7 +196,11 @@ export class RebateService {
         prev.grossProfit = Number((prev.grossProfit + d.grossProfit).toFixed(2));
         map.set(d.skuCode, prev);
       }
-      return { summary: { totalQty, totalSales, totalProfit, marginRate }, rows: Array.from(map.values()) };
+      const allRows = Array.from(map.values());
+      const pg = parsePagination(pq, 20);
+      return pg.enabled
+        ? { summary: { totalQty, totalSales, totalProfit, marginRate }, rows: allRows.slice(pg.skip, pg.skip + pg.pageSize), total: allRows.length, page: pg.page, pageSize: pg.pageSize }
+        : { summary: { totalQty, totalSales, totalProfit, marginRate }, rows: allRows, total: allRows.length };
     }
 
     if (groupBy === 'customer') {
@@ -214,19 +219,41 @@ export class RebateService {
         prev.grossProfit = Number((prev.grossProfit + d.grossProfit).toFixed(2));
         map.set(d.customerName, prev);
       }
-      return { summary: { totalQty, totalSales, totalProfit, marginRate }, rows: Array.from(map.values()) };
+      const allRows = Array.from(map.values());
+      const pg = parsePagination(pq, 20);
+      return pg.enabled
+        ? { summary: { totalQty, totalSales, totalProfit, marginRate }, rows: allRows.slice(pg.skip, pg.skip + pg.pageSize), total: allRows.length, page: pg.page, pageSize: pg.pageSize }
+        : { summary: { totalQty, totalSales, totalProfit, marginRate }, rows: allRows, total: allRows.length };
     }
 
-    return { summary: { totalQty, totalSales, totalProfit, marginRate }, rows: details };
+    const pg = parsePagination(pq, 20);
+    return pg.enabled
+      ? { summary: { totalQty, totalSales, totalProfit, marginRate }, rows: details.slice(pg.skip, pg.skip + pg.pageSize), total: details.length, page: pg.page, pageSize: pg.pageSize }
+      : { summary: { totalQty, totalSales, totalProfit, marginRate }, rows: details, total: details.length };
   }
 
   /**
    * Auditable Dealer KPI Rebate Auto-Calculation:
    * Base rebate tier by payment volume + Bonus rebate by SKU coverage & new active clinics - Compliance penalties.
    */
-  async listRebates(user: AuthUser) {
+  async listRebates(user: AuthUser, pq?: PageQuery) {
+    const where = user.orgType === 'HQ' ? {} : { orgId: user.orgId };
+    const pg = parsePagination(pq, 20);
+    if (pg.enabled) {
+      const [total, items] = await Promise.all([
+        this.prisma.rebateStatement.count({ where }),
+        this.prisma.rebateStatement.findMany({
+          where,
+          include: { org: { select: { id: true, name: true, code: true, priceTier: true } } },
+          orderBy: [{ periodMonth: 'desc' }, { finalRebateAmount: 'desc' }],
+          skip: pg.skip,
+          take: pg.pageSize,
+        }),
+      ]);
+      return { items, total, page: pg.page, pageSize: pg.pageSize };
+    }
     return this.prisma.rebateStatement.findMany({
-      where: user.orgType === 'HQ' ? {} : { orgId: user.orgId },
+      where,
       include: { org: { select: { id: true, name: true, code: true, priceTier: true } } },
       orderBy: [{ periodMonth: 'desc' }, { finalRebateAmount: 'desc' }],
     });
@@ -352,13 +379,22 @@ export class RebateController {
   }
 
   @Get('reports/sales')
-  salesReport(@CurrentUser() user: AuthUser, @Query('groupBy') groupBy?: string) {
-    return this.rebateService.getSalesReport(user, groupBy || 'detail');
+  salesReport(
+    @CurrentUser() user: AuthUser,
+    @Query('groupBy') groupBy?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    return this.rebateService.getSalesReport(user, groupBy || 'detail', { page, pageSize });
   }
 
   @Get('rebates')
-  listRebates(@CurrentUser() user: AuthUser) {
-    return this.rebateService.listRebates(user);
+  listRebates(
+    @CurrentUser() user: AuthUser,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    return this.rebateService.listRebates(user, { page, pageSize });
   }
 
   @Post('rebates/calculate')

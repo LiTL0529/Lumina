@@ -3,9 +3,7 @@
     <div class="page-header">
       <div>
         <h1 class="page-title">服务商与机构</h1>
-        <p class="page-subtitle">
-          同一个机构被两个服务商同时报备时，以服务端时间戳为准，先报先得；90 天保护期内别人抢不走，270 天没有复购则自动回公海。
-        </p>
+        <p class="page-subtitle">服务商管理与机构报备保护</p>
       </div>
       <div class="page-actions">
         <el-button @click="runExpirySweep">执行到期巡检</el-button>
@@ -51,7 +49,7 @@
               <span class="dc-stat-label">绑定机构</span>
             </div>
             <div class="dc-stat">
-              <span class="dc-stat-value num">{{ d.contactName || '—' }}</span>
+              <span class="dc-stat-value">{{ d.contactName || '—' }}</span>
               <span class="dc-stat-label">负责人</span>
             </div>
           </div>
@@ -84,69 +82,81 @@
         <el-button link type="primary" @click="reportDialog = true">报备新机构</el-button>
       </div>
 
-      <el-table :data="clinics" size="small" empty-text="还没有机构，先报备一家试试">
-        <el-table-column label="机构" min-width="210">
-          <template #default="{ row }">
-            <div class="cell-strong">{{ row.name }}</div>
-            <div class="cell-sub">{{ row.province || '' }}{{ row.city }} · {{ row.contactName || '—' }} {{ row.contactPhone || '' }}</div>
-          </template>
-        </el-table-column>
-        <el-table-column label="归属服务商" width="170">
-          <template #default="{ row }">
-            <span :class="row.ownerOrg ? '' : 'muted'">{{ row.ownerOrg?.name || '公海待报备' }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="状态" width="120">
-          <template #default="{ row }">
-            <span class="bind-pill" :class="bindClass(row.bindStatus)">{{ bindLabel(row.bindStatus) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="规则倒计时" width="210">
-          <template #default="{ row }">
-            <template v-if="row.protectDaysLeft !== null && row.protectDaysLeft !== undefined">
-              <div class="cd-label">
-                保护剩余 <strong :class="{ urgent: row.protectDaysLeft <= 15 }">{{ row.protectDaysLeft }}</strong> 天
-              </div>
-              <div class="cd-bar"><span :style="{ width: `${Math.min(100, (row.protectDaysLeft / 90) * 100)}%` }" /></div>
+      <div class="table-wrap">
+        <el-table :data="clinics" size="small" style="width: 100%" empty-text="还没有机构，先报备一家试试">
+          <el-table-column label="机构" min-width="175">
+            <template #default="{ row }">
+              <div class="cell-strong">{{ row.name }}</div>
+              <div class="cell-sub">{{ row.province || '' }}{{ row.city }} · {{ row.contactName || '—' }} {{ row.contactPhone || '' }}</div>
             </template>
-            <template v-else-if="row.unbindDaysLeft !== null && row.unbindDaysLeft !== undefined">
-              <div class="cd-label">
-                解绑剩余 <strong :class="{ urgent: row.unbindDaysLeft <= 30 }">{{ row.unbindDaysLeft }}</strong> 天
-              </div>
-              <div class="cd-bar soft">
-                <span :style="{ width: `${Math.min(100, (row.unbindDaysLeft / 270) * 100)}%` }" />
-              </div>
+          </el-table-column>
+          <el-table-column label="归属服务商" min-width="135">
+            <template #default="{ row }">
+              <span :class="row.ownerOrg ? '' : 'muted'">{{ row.ownerOrg?.name || '公海待报备' }}</span>
             </template>
-            <span v-else class="cell-sub">可抢单报备</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="报备时间" width="150">
-          <template #default="{ row }">
-            <span class="mono cell-sub">{{ row.reportedAt ? row.reportedAt.replace('T', ' ').slice(0, 16) : '—' }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="欠款" width="100" align="right">
-          <template #default="{ row }">
-            <span class="mono" :class="Number(row.arrearsAmount) > 0 ? 'bad' : 'muted'">
-              ¥{{ Number(row.arrearsAmount).toFixed(0) }}
-            </span>
-          </template>
-        </el-table-column>
-        <el-table-column label="" width="120" align="right" fixed="right">
-          <template #default="{ row }">
-            <el-button v-if="row.bindStatus === 'PUBLIC_POOL'" size="small" type="primary" plain @click="claimFromPool(row)">
-              抢单报备
-            </el-button>
-            <el-button v-else size="small" link @click="openLogs(row)">归属日志</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+          </el-table-column>
+          <el-table-column label="状态" width="90">
+            <template #default="{ row }">
+              <span class="bind-pill" :class="bindClass(row.bindStatus)">{{ bindLabel(row.bindStatus) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="规则倒计时" width="155">
+            <template #default="{ row }">
+              <template v-if="row.protectDaysLeft !== null && row.protectDaysLeft !== undefined">
+                <div class="cd-label">
+                  保护剩余 <strong :class="{ urgent: row.protectDaysLeft <= 15 }">{{ row.protectDaysLeft }}</strong> 天
+                </div>
+                <div class="cd-bar"><span :style="{ width: `${Math.min(100, (row.protectDaysLeft / 90) * 100)}%` }" /></div>
+              </template>
+              <template v-else-if="row.unbindDaysLeft !== null && row.unbindDaysLeft !== undefined">
+                <div class="cd-label">
+                  解绑剩余 <strong :class="{ urgent: row.unbindDaysLeft <= 30 }">{{ row.unbindDaysLeft }}</strong> 天
+                </div>
+                <div class="cd-bar soft">
+                  <span :style="{ width: `${Math.min(100, (row.unbindDaysLeft / 270) * 100)}%` }" />
+                </div>
+              </template>
+              <span v-else class="cell-sub">可抢单报备</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="报备时间" width="136">
+            <template #default="{ row }">
+              <span class="mono cell-sub">{{ row.reportedAt ? formatDateTime(row.reportedAt) : '—' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="欠款" width="80" align="right">
+            <template #default="{ row }">
+              <span class="mono" :class="Number(row.arrearsAmount) > 0 ? 'bad' : 'muted'">
+                ¥{{ Number(row.arrearsAmount).toFixed(0) }}
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column label="" width="96" align="right" :fixed="width <= 1180 ? false : 'right'">
+            <template #default="{ row }">
+              <el-button v-if="row.bindStatus === 'PUBLIC_POOL'" size="small" type="primary" plain @click="claimFromPool(row)">
+                抢单报备
+              </el-button>
+              <el-button v-else size="small" link @click="openLogs(row)">归属日志</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+        <div class="table-pager">
+          <el-pagination
+            background
+            layout="total, prev, pager, next"
+            :total="clinicTotal"
+            :page-size="clinicPageSize"
+            :current-page="clinicPage"
+            @current-change="(p: number) => loadClinics(p)"
+          />
+        </div>
+      </div>
     </section>
 
     <!-- 报备 -->
-    <el-dialog v-model="reportDialog" title="终端机构报备" width="540px">
+    <el-dialog v-model="reportDialog" title="终端机构报备" width="min(540px, 94vw)" align-center>
       <p class="dialog-note">提交即锁定服务端时间戳。同城重复报备以先提交者为准。</p>
-      <el-form :model="reportForm" label-width="100px">
+      <el-form :model="reportForm" :label-width="isMobile ? 'auto' : '100px'" :label-position="isMobile ? 'top' : 'right'">
         <el-form-item label="机构全称" required>
           <el-input v-model="reportForm.name" placeholder="如：南昌华美皮肤管理中心" />
         </el-form-item>
@@ -185,8 +195,8 @@
     </el-dialog>
 
     <!-- 新增服务商 -->
-    <el-dialog v-model="dealerDialog" title="新增服务商" width="500px">
-      <el-form :model="dealerForm" label-width="100px">
+    <el-dialog v-model="dealerDialog" title="新增服务商" width="min(500px, 94vw)" align-center>
+      <el-form :model="dealerForm" :label-width="isMobile ? 'auto' : '100px'" :label-position="isMobile ? 'top' : 'right'">
         <el-form-item label="名称" required><el-input v-model="dealerForm.name" /></el-form-item>
         <el-form-item label="编码" required><el-input v-model="dealerForm.code" placeholder="如 DL-WH01" /></el-form-item>
         <el-form-item label="授权城市" required>
@@ -202,7 +212,7 @@
     </el-dialog>
 
     <!-- 归属日志 -->
-    <el-drawer v-model="logsDialog" :size="440" :with-header="false">
+    <el-drawer v-model="logsDialog" :size="isMobile ? '100%' : '440px'" :with-header="false">
       <div class="drawer-inner">
         <div class="drawer-head">
           <div>
@@ -220,7 +230,7 @@
             </div>
             <div class="tl-body">
               <div class="tl-label">{{ l.action }}</div>
-              <div class="tl-time mono">{{ l.serverTimestamp?.replace('T', ' ').slice(0, 19) }}</div>
+              <div class="tl-time mono">{{ formatDateTime(l.serverTimestamp, true) }}</div>
               <div class="tl-meta">{{ l.remark }}</div>
             </div>
           </li>
@@ -235,8 +245,12 @@ import { computed, onMounted, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { api } from '../utils/api';
 import { useAuthStore } from '../stores/auth';
+import { formatDateTime, useViewport } from '../utils/format';
 
 const auth = useAuthStore();
+const { width } = useViewport();
+const isMobile = computed(() => width.value <= 720);
+const isCompact = computed(() => width.value <= 960);
 const clinics = ref<any[]>([]);
 const orgs = ref<any[]>([]);
 
@@ -262,9 +276,19 @@ const clinicLogs = ref<any[]>([]);
 
 const dealers = computed(() => orgs.value.filter((o) => o.type === 'DEALER'));
 
+const clinicPage = ref(1);
+const clinicPageSize = 20;
+const clinicTotal = ref(0);
+
+async function loadClinics(page = clinicPage.value) {
+  clinicPage.value = page;
+  const res = (await api.get('/clinics', { params: { page, pageSize: clinicPageSize } })) as any;
+  clinics.value = Array.isArray(res) ? res : res.items || [];
+  clinicTotal.value = Array.isArray(res) ? res.length : Number(res.total || 0);
+}
+
 async function loadAll() {
-  const [c, o] = await Promise.all([api.get('/clinics'), api.get('/orgs')]);
-  clinics.value = c as unknown as any[];
+  const [, o] = await Promise.all([loadClinics(clinicPage.value), api.get('/orgs')]);
   orgs.value = o as unknown as any[];
 }
 
@@ -356,8 +380,11 @@ function bindClass(s: string) {
 <style scoped>
 .dealer-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(290px, 100%), 1fr));
   gap: 12px;
+}
+.table-wrap {
+  overflow-x: auto;
 }
 .dealer-card {
   border: 1px solid var(--line);
@@ -506,9 +533,9 @@ function bindClass(s: string) {
   color: var(--seal);
 }
 .cd-bar {
-  height: 3px;
-  background: #efeee6;
-  border-radius: 3px;
+  height: 4px;
+  background: var(--surface-3);
+  border-radius: 99px;
   margin-top: 8px;
   overflow: hidden;
   max-width: 150px;
@@ -516,10 +543,11 @@ function bindClass(s: string) {
 .cd-bar span {
   display: block;
   height: 100%;
-  background: var(--brand-line);
+  border-radius: 99px;
+  background: #111827;
 }
 .cd-bar.soft span {
-  background: #cfc9b8;
+  background: #cbd5e1;
 }
 .bad {
   color: var(--seal);

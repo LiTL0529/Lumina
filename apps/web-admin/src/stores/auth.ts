@@ -28,16 +28,45 @@ export const useAuthStore = defineStore('auth', () => {
   const isAuthenticated = computed(() => Boolean(token.value && user.value));
   const isHQ = computed(() => user.value?.orgType === 'HQ');
 
-  async function login(username: string, password: string) {
-    const res = (await api.post('/auth/login', { username, password })) as unknown as {
-      accessToken: string;
-      user: UserSession;
-    };
+  function applySession(res: { accessToken: string; user: UserSession }) {
     token.value = res.accessToken;
     user.value = res.user;
     localStorage.setItem('lumina_token', res.accessToken);
     localStorage.setItem('lumina_user', JSON.stringify(res.user));
     return res.user;
+  }
+
+  async function login(username: string, password: string) {
+    const res = (await api.post('/auth/login', { username, password })) as unknown as {
+      accessToken: string;
+      user: UserSession;
+    };
+    return applySession(res);
+  }
+
+  async function loginBySms(phone: string, code: string) {
+    const res = (await api.post('/auth/login-sms', { phone, code })) as unknown as {
+      accessToken: string;
+      user: UserSession;
+      isNewUser?: boolean;
+    };
+    applySession(res);
+    return res;
+  }
+
+  async function registerBySms(payload: {
+    phone: string;
+    code: string;
+    realName: string;
+    password: string;
+    orgId?: string;
+    roleCode?: string;
+  }) {
+    const res = (await api.post('/auth/register', payload)) as unknown as {
+      accessToken: string;
+      user: UserSession;
+    };
+    return applySession(res);
   }
 
   function logout() {
@@ -47,5 +76,5 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.removeItem('lumina_user');
   }
 
-  return { token, user, isAuthenticated, isHQ, login, logout };
+  return { token, user, isAuthenticated, isHQ, login, loginBySms, registerBySms, logout };
 });

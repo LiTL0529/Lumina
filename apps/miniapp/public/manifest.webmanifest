@@ -1,0 +1,19 @@
+{
+  "name": "Lumina 扫码",
+  "short_name": "Lumina",
+  "description": "Lumina 品牌一物一码供销溯源与扫码 App",
+  "start_url": "/lumina/v",
+  "scope": "/lumina/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "icons": [
+    {
+      "src": "/lumina/icon-lumina.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

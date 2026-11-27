@@ -7,6 +7,24 @@ import './styles/index.css';
 import App from './App.vue';
 import { router } from './router';
 
+// Suppress benign Element Plus table ResizeObserver browser loop notifications
+const origRO = window.ResizeObserver;
+if (typeof origRO === 'function') {
+  window.ResizeObserver = class ResizeObserver extends origRO {
+    constructor(cb: ResizeObserverCallback) {
+      super((entries, obs) => {
+        window.requestAnimationFrame(() => cb(entries, obs));
+      });
+    }
+  };
+}
+window.addEventListener('error', (e) => {
+  if (e.message && e.message.includes('ResizeObserver loop')) {
+    e.stopImmediatePropagation();
+    e.preventDefault();
+  }
+});
+
 const app = createApp(App);
 app.use(createPinia());
 app.use(router);

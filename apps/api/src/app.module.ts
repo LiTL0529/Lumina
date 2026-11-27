@@ -13,6 +13,9 @@ import { OrderModule } from './modules/order/order.module';
 import { StockModule } from './modules/stock/stock.module';
 import { RebateModule } from './modules/rebate/rebate.module';
 import { PrintModule } from './modules/print/print.module';
+import { CrmModule } from './modules/crm/crm.module';
+import { AuditModule } from './modules/audit/audit.module';
+import { AiModule } from './modules/ai/ai.module';
 
 @Module({
   imports: [
@@ -21,6 +24,7 @@ import { PrintModule } from './modules/print/print.module';
     PrismaModule,
     RedisModule,
     EventsModule,
+    AuditModule,
     AuthModule,
     OrgModule,
     ProductModule,
@@ -30,6 +34,8 @@ import { PrintModule } from './modules/print/print.module';
     StockModule,
     RebateModule,
     PrintModule,
+    CrmModule,
+    AiModule,
   ],
 })
 export class AppModule {}

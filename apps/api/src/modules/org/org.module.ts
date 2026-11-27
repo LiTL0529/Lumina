@@ -85,10 +85,13 @@ export class OrgController {
     if (user.orgType !== 'HQ') {
       throw new ForbiddenException('仅品牌总部可调整停供状态');
     }
+    if (typeof body?.supplyFrozen !== 'boolean') {
+      throw new BadRequestException('参数 supplyFrozen 必须为布尔值（true 或 false）');
+    }
     return this.prisma.organization.update({
       where: { id },
       data: {
-        supplyFrozen: Boolean(body.supplyFrozen),
+        supplyFrozen: body.supplyFrozen,
         freezeReason: body.supplyFrozen ? body.freezeReason || '月度核验异常或违反价格/流向红线' : null,
       },
     });
@@ -134,11 +137,13 @@ export class OrgController {
 
   @Get('rules')
   async getRules() {
-    return this.prisma.systemRuleConfig.upsert({
+    const cfg = await this.prisma.systemRuleConfig.upsert({
       where: { id: 'default' },
       update: {},
       create: { id: 'default' },
     });
+    const { jumdataAppSecret: _secret, ...safe } = cfg;
+    return safe;
   }
 
   @Put('rules')
@@ -159,11 +164,23 @@ export class OrgController {
     if (user.orgType !== 'HQ') {
       throw new ForbiddenException('仅品牌总部可修改合同规则参数');
     }
-    return this.prisma.systemRuleConfig.upsert({
+    const safeUpdate = {
+      clinicProtectDays: body.clinicProtectDays,
+      clinicUnbindDays: body.clinicUnbindDays,
+      unbindWarnDaysBefore: body.unbindWarnDaysBefore,
+      defaultMinSupplyRatio: body.defaultMinSupplyRatio,
+      defaultMinRetailRatio: body.defaultMinRetailRatio,
+      highFreqVerifyThreshold: body.highFreqVerifyThreshold,
+      allowSpecialPriceApprove: body.allowSpecialPriceApprove,
+      verifyBaseUrl: body.verifyBaseUrl,
+    };
+    const cfg = await this.prisma.systemRuleConfig.upsert({
       where: { id: 'default' },
-      update: body,
-      create: { id: 'default', ...body },
+      update: safeUpdate,
+      create: { id: 'default', ...safeUpdate },
     });
+    const { jumdataAppSecret: _secret, ...safe } = cfg;
+    return safe;
   }
 }
 

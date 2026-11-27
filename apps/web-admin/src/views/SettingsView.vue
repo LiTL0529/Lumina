@@ -3,9 +3,7 @@
     <div class="page-header">
       <div>
         <h1 class="page-title">商品与规则</h1>
-        <p class="page-subtitle">
-          商品主数据决定箱规和指导价；打印模板决定针式联单印什么；规则参数决定 90 / 270 天保护和 3.5 折红线的松紧。
-        </p>
+        <p class="page-subtitle">商品档案、打印模板、渠道规则与短信通道</p>
       </div>
       <div class="page-actions" v-if="auth.isHQ">
         <el-button @click="importDialog = true">CSV 批量导入</el-button>
@@ -54,6 +52,16 @@
               </template>
             </el-table-column>
           </el-table>
+          <div class="table-pager">
+            <el-pagination
+              background
+              layout="total, prev, pager, next"
+              :total="prodTotal"
+              :page-size="prodPageSize"
+              :current-page="prodPage"
+              @current-change="(p: number) => loadProducts(p)"
+            />
+          </div>
         </div>
       </el-tab-pane>
 
@@ -172,6 +180,41 @@
             </div>
           </section>
 
+          <section v-if="auth.isHQ && smsCfg" class="rule-section">
+            <div class="rule-section-head">
+              <h3>
+                聚美智数 · 短信验证码通道
+                <span class="sms-state-pill" :class="smsCfg.mode === 'LIVE' ? 'live' : 'mock'">
+                  {{ smsCfg.mode === 'LIVE' ? '已接入真实发信' : '演示模式（未填凭据）' }}
+                </span>
+              </h3>
+              <p>对接官方 POST https://api.jumdata.com/sms/send（SHA-256 签名）。填入 appId 与 appSecret 保存后立即切换真实短信下发。</p>
+            </div>
+            <div class="rule-row column">
+              <label>聚美智数 AppId</label>
+              <el-input v-model="smsForm.appId" placeholder="请输入聚美智数控制台分配的 appId" />
+            </div>
+            <div class="rule-row column">
+              <label>聚美智数 AppSecret（密钥）</label>
+              <el-input
+                v-model="smsForm.appSecret"
+                type="password"
+                show-password
+                :placeholder="smsCfg.hasAppSecret ? `已配置（${smsCfg.appSecretMasked}），留空则保持不变` : '请输入聚美智数 appSecret'"
+              />
+            </div>
+            <div class="rule-row column">
+              <label>短信模板 ID（templateId）</label>
+              <el-input v-model="smsForm.templateId" placeholder="默认官方测试模板 JM1000372" />
+              <p class="rule-note">正式商用请在聚美智数后台报备自定义签名与模板 ID；调试期可使用官方测试模板 JM1000372。</p>
+            </div>
+            <div class="sms-cfg-actions">
+              <el-button type="primary" plain :loading="savingSms" @click="saveSmsConfig">保存短信配置</el-button>
+              <el-input v-model="testSmsPhone" maxlength="11" placeholder="输入手机号测试发信" style="width: 180px" />
+              <el-button :loading="testingSms" @click="sendTestSms">发送测试短信</el-button>
+            </div>
+          </section>
+
           <div class="rule-actions" v-if="auth.isHQ">
             <el-button type="primary" native-type="submit">保存规则</el-button>
             <span class="hint-line">保存后立即对新单据生效，历史单据不变。</span>
@@ -181,8 +224,8 @@
     </el-tabs>
 
     <!-- 新增商品 -->
-    <el-dialog v-model="productDialog" title="新增商品" width="540px">
-      <el-form :model="productForm" label-width="100px">
+    <el-dialog v-model="productDialog" title="新增商品" width="min(540px, 94vw)" align-center>
+      <el-form :model="productForm" :label-width="isMobile ? 'auto' : '100px'" :label-position="isMobile ? 'top' : 'right'">
         <el-form-item label="货号" required><el-input v-model="productForm.skuCode" placeholder="如 LM-020" /></el-form-item>
         <el-form-item label="名称" required><el-input v-model="productForm.name" /></el-form-item>
         <el-form-item label="品牌" required>
@@ -212,7 +255,7 @@
     </el-dialog>
 
     <!-- 导入 -->
-    <el-dialog v-model="importDialog" title="CSV 批量导入商品" width="620px">
+    <el-dialog v-model="importDialog" title="CSV 批量导入商品" width="min(620px, 94vw)" align-center>
       <p class="dialog-note">
         每行一条：<code class="mono">货号,商品名称,品牌,规格,官方零售价,箱规</code>，可直接从生意通导出的表格粘贴。
       </p>
@@ -231,12 +274,15 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { api } from '../utils/api';
 import { useAuthStore } from '../stores/auth';
+import { useViewport } from '../utils/format';
 
 const auth = useAuthStore();
+const { width } = useViewport();
+const isMobile = computed(() => width.value <= 720);
 const activeTab = ref('products');
 const products = ref<any[]>([]);
 const brands = ref<any[]>([]);
@@ -244,6 +290,11 @@ const printTemplates = ref<any[]>([]);
 const columnDefs = ref<any[]>([]);
 const systemVarDefs = ref<any[]>([]);
 const rules = ref<any>(null);
+const smsCfg = ref<any>(null);
+const smsForm = ref({ appId: '', appSecret: '', templateId: 'JM1000372' });
+const savingSms = ref(false);
+const testingSms = ref(false);
+const testSmsPhone = ref('');
 
 const productDialog = ref(false);
 const productForm = ref({
@@ -260,14 +311,24 @@ const productForm = ref({
 const importDialog = ref(false);
 const importText = ref('');
 
+const prodPage = ref(1);
+const prodPageSize = 20;
+const prodTotal = ref(0);
+
+async function loadProducts(page = prodPage.value) {
+  prodPage.value = page;
+  const res = (await api.get('/products', { params: { page, pageSize: prodPageSize } })) as any;
+  products.value = Array.isArray(res) ? res : res.items || [];
+  prodTotal.value = Array.isArray(res) ? res.length : Number(res.total || 0);
+}
+
 async function loadAll() {
-  const [p, b, pt, r] = await Promise.all([
-    api.get('/products'),
+  const [, b, pt, r] = await Promise.all([
+    loadProducts(prodPage.value),
     api.get('/brands'),
     api.get('/print/templates'),
     api.get('/rules'),
   ]);
-  products.value = p as unknown as any[];
   brands.value = b as unknown as any[];
   const ptData = pt as any;
   printTemplates.value = ptData.templates;
@@ -280,6 +341,19 @@ async function loadAll() {
   };
   if (brands.value.length && !productForm.value.brandId) {
     productForm.value.brandId = brands.value[0].id;
+  }
+  if (auth.isHQ) {
+    try {
+      const sc = (await api.get('/auth/sms/config')) as any;
+      smsCfg.value = sc;
+      smsForm.value = {
+        appId: sc.appId || '',
+        appSecret: '',
+        templateId: sc.templateId || 'JM1000372',
+      };
+    } catch {
+      // ignore
+    }
   }
 }
 
@@ -339,11 +413,66 @@ async function saveRules() {
   });
   ElMessage.success('规则已保存生效');
 }
+
+async function saveSmsConfig() {
+  savingSms.value = true;
+  try {
+    const sc = (await api.put('/auth/sms/config', smsForm.value)) as any;
+    smsCfg.value = sc;
+    smsForm.value.appSecret = '';
+    ElMessage.success(sc.mode === 'LIVE' ? '聚美智数短信配置已保存并切换为真实发信模式' : '短信配置已保存');
+  } finally {
+    savingSms.value = false;
+  }
+}
+
+async function sendTestSms() {
+  if (!/^1[3-9]\d{9}$/.test(testSmsPhone.value.trim())) {
+    return ElMessage.warning('请输入有效的 11 位测试手机号');
+  }
+  testingSms.value = true;
+  try {
+    const res = (await api.post('/auth/sms/test', { phone: testSmsPhone.value.trim() })) as any;
+    ElMessage.success(res.message || '测试短信已发送');
+  } finally {
+    testingSms.value = false;
+  }
+}
 </script>
 
 <style scoped>
 .plain-tabs :deep(.el-tabs__header) {
   margin-bottom: 12px;
+}
+.sms-state-pill {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 99px;
+  vertical-align: middle;
+}
+.sms-state-pill.live {
+  background: var(--jade-tint);
+  color: var(--jade);
+  border: 1px solid #cfe0d3;
+}
+.sms-state-pill.mock {
+  background: var(--ochre-tint);
+  color: var(--ochre);
+  border: 1px solid #e6d5ae;
+}
+.sms-cfg-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+.sms-cfg-actions :deep(.el-button + .el-button) {
+  margin-left: 0;
 }
 .cell-doc {
   color: var(--brand-ink);
@@ -383,7 +512,7 @@ async function saveRules() {
 /* 模板 */
 .tpl-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
   gap: 14px;
 }
 .tpl-card {
@@ -466,7 +595,7 @@ async function saveRules() {
 .rule-section-head h3 {
   margin: 0;
   font-size: 14px;
-  font-weight: 650;
+  font-weight: 600;
 }
 .rule-section-head p {
   margin: 5px 0 0;
@@ -552,12 +681,26 @@ async function saveRules() {
 }
 
 @media (max-width: 860px) {
-  .rule-row {
+  .rule-section {
+    padding: 14px 14px 6px;
+  }
+  .rule-row,
+  .rule-row.inline,
+  .rule-row.column {
     grid-template-columns: 1fr;
     gap: 6px;
   }
+  .rule-row > label {
+    padding-top: 0;
+  }
+  .rule-row.column .rule-note {
+    grid-column: auto;
+  }
   .rule-note {
     padding-top: 0;
+  }
+  .rule-actions {
+    flex-wrap: wrap;
   }
   .form-2 {
     grid-template-columns: 1fr;

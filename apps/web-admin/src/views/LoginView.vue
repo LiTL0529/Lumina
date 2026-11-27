@@ -1,104 +1,162 @@
 <template>
-  <div class="login-shell">
-    <section class="story">
-      <div class="story-top">
+  <div class="login-canvas">
+    <div class="login-card">
+      <section class="story">
         <div class="brand">
-          <div class="brand-mark" aria-hidden="true"><span /><span /><span /><span /></div>
+          <div class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 8V6a2 2 0 0 1 2-2h2" />
+              <path d="M16 4h2a2 2 0 0 1 2 2v2" />
+              <path d="M20 16v2a2 2 0 0 1-2 2h-2" />
+              <path d="M8 20H6a2 2 0 0 1-2-2v-2" />
+              <path d="M9 9h6v6H9z" />
+            </svg>
+          </div>
           <span class="brand-word">LUMINA</span>
         </div>
-        <div class="story-kicker">供销溯源 · 渠道规则执行系统</div>
-      </div>
+        <div class="story-main">
+          <h1 class="story-title">供销溯源与<br />渠道执行系统</h1>
+        </div>
+        <div class="story-foot">一物一码 · 流向留痕 · 渠道规则</div>
+      </section>
 
-      <div class="story-main">
-        <h1 class="story-title">每一盒货，<br />都有据可查。</h1>
-        <p class="story-desc">
-          出厂赋码、总仓扫码入库、服务商扫码出库、机构签收、顾客验真——货走到哪一层，系统就记到哪一层。合同里的 90 天保护、270 天解绑、3.5 折红线，从此不靠台账和口头。
-        </p>
+      <!-- 右侧：纯白表单区 -->
+      <section class="panel">
+        <div class="panel-inner">
+          <div class="panel-head">
+            <h2>{{ mode === 'register' ? '注册账号' : '登录工作台' }}</h2>
+            <p>{{ mode === 'register' ? '手机号验证后快速加入所属服务商' : 'PC 与手机端数据实时同步' }}</p>
+          </div>
 
-        <ol class="ladder">
-          <li v-for="(step, i) in ladder" :key="step.label" class="ladder-step">
-            <span class="ladder-index mono">{{ String(i + 1).padStart(2, '0') }}</span>
-            <span class="ladder-line" />
-            <div class="ladder-body">
-              <div class="ladder-label">{{ step.label }}</div>
-              <div class="ladder-note">{{ step.note }}</div>
+          <div class="mode-tabs" role="tablist">
+            <button type="button" :class="{ on: mode === 'sms' }" @click="switchMode('sms')">短信登录</button>
+            <button type="button" :class="{ on: mode === 'password' }" @click="switchMode('password')">密码登录</button>
+            <button type="button" :class="{ on: mode === 'register' }" @click="switchMode('register')">手机注册</button>
+          </div>
+
+          <!-- 1. 短信验证码登录 -->
+          <el-form v-if="mode === 'sms'" :model="smsForm" label-position="top" class="login-form" @submit.prevent="submitSmsLogin">
+            <el-form-item label="手机号">
+              <el-input
+                v-model="smsForm.phone"
+                maxlength="11"
+                placeholder="请输入 11 位手机号"
+                size="large"
+              />
+            </el-form-item>
+            <el-form-item label="短信验证码">
+              <div class="sms-code-row">
+                <el-input
+                  v-model="smsForm.code"
+                  maxlength="6"
+                  placeholder="6 位数字验证码"
+                  size="large"
+                  class="mono"
+                  @keyup.enter="submitSmsLogin"
+                />
+                <button
+                  type="button"
+                  class="sms-send-btn"
+                  :disabled="sendingSms || smsCooldown > 0"
+                  @click="handleSendSms(smsForm.phone, 'LOGIN')"
+                >
+                  {{ smsCooldown > 0 ? `${smsCooldown}s 后重发` : sendingSms ? '发送中…' : '获取验证码' }}
+                </button>
+              </div>
+            </el-form-item>
+            <div v-if="smsNotice" class="sms-notice" :class="smsNoticeMode === 'MOCK' ? 'mock' : 'live'">
+              {{ smsNotice }}
             </div>
-          </li>
-        </ol>
-      </div>
-
-      <div class="ticket">
-        <div class="ticket-code mono">L8Q2 7ZK4 M3XD 9F1A</div>
-        <div class="ticket-meta">
-          <span>单品防伪码</span>
-          <span class="ticket-sep">·</span>
-          <span>HMAC-SHA256 签名</span>
-        </div>
-        <div class="ticket-cut" aria-hidden="true" />
-        <div class="ticket-foot">微信扫码即可验真伪、查授权服务商</div>
-      </div>
-    </section>
-
-    <section class="panel">
-      <div class="panel-inner">
-        <div class="panel-head">
-          <h2>登录工作台</h2>
-          <p>库管用电脑、销售用手机，同一套数据。</p>
-        </div>
-
-        <el-form :model="form" label-position="top" class="login-form" @submit.prevent="submit">
-          <el-form-item label="账号">
-            <el-input v-model="form.username" placeholder="请输入账号" size="large" />
-          </el-form-item>
-          <el-form-item label="密码">
-            <el-input
-              v-model="form.password"
-              type="password"
-              show-password
-              placeholder="默认演示密码 123456"
-              size="large"
-              @keyup.enter="submit"
-            />
-          </el-form-item>
-          <button class="submit-btn" type="button" :disabled="loading" @click="submit">
-            {{ loading ? '正在进入…' : '进入系统' }}
-          </button>
-        </el-form>
-
-        <div class="demo">
-          <div class="demo-head">
-            <span>演示账号</span>
-            <span class="demo-hint">点击即登录，密码均为 123456</span>
-          </div>
-          <div class="demo-list">
-            <button
-              v-for="acc in demoAccounts"
-              :key="acc.username"
-              type="button"
-              class="demo-row"
-              @click="quickLogin(acc.username)"
-            >
-              <span class="demo-avatar">{{ acc.realName.slice(0, 1) }}</span>
-              <span class="demo-body">
-                <span class="demo-name">{{ acc.realName }}</span>
-                <span class="demo-org">{{ acc.orgName }}</span>
-              </span>
-              <span class="demo-arrow" aria-hidden="true">→</span>
+            <button class="submit-btn" type="button" :disabled="loading" @click="submitSmsLogin">
+              {{ loading ? '正在验证…' : '短信验证登录' }}
             </button>
-          </div>
-        </div>
-      </div>
+            <p class="sms-auto-tip">未注册手机号验证通过后将自动注册并登录</p>
+          </el-form>
 
-      <footer class="panel-foot">
-        <span>Lumina 品牌总部 · 渠道数字化</span>
-        <span class="mono">v1.0</span>
-      </footer>
-    </section>
+          <!-- 2. 账号密码登录 -->
+          <el-form v-else-if="mode === 'password'" :model="form" label-position="top" class="login-form" @submit.prevent="submitPassword">
+            <el-form-item label="账号 / 手机号">
+              <el-input v-model="form.username" placeholder="请输入账号或已注册手机号" size="large" />
+            </el-form-item>
+            <el-form-item label="密码">
+              <el-input
+                v-model="form.password"
+                type="password"
+                show-password
+                placeholder="请输入登录密码"
+                size="large"
+                @keyup.enter="submitPassword"
+              />
+            </el-form-item>
+            <button class="submit-btn" type="button" :disabled="loading" @click="submitPassword">
+              {{ loading ? '正在进入…' : '进入系统' }}
+            </button>
+          </el-form>
+
+          <!-- 3. 手机短信验证码注册 -->
+          <el-form v-else :model="regForm" label-position="top" class="login-form" @submit.prevent="submitRegister">
+            <el-form-item label="手机号">
+              <el-input v-model="regForm.phone" maxlength="11" placeholder="请输入 11 位手机号" size="large" />
+            </el-form-item>
+            <el-form-item label="短信验证码">
+              <div class="sms-code-row">
+                <el-input
+                  v-model="regForm.code"
+                  maxlength="6"
+                  placeholder="6 位数字验证码"
+                  size="large"
+                  class="mono"
+                />
+                <button
+                  type="button"
+                  class="sms-send-btn"
+                  :disabled="sendingSms || smsCooldown > 0"
+                  @click="handleSendSms(regForm.phone, 'REGISTER')"
+                >
+                  {{ smsCooldown > 0 ? `${smsCooldown}s 后重发` : sendingSms ? '发送中…' : '获取验证码' }}
+                </button>
+              </div>
+            </el-form-item>
+            <div v-if="smsNotice" class="sms-notice" :class="smsNoticeMode === 'MOCK' ? 'mock' : 'live'">
+              {{ smsNotice }}
+            </div>
+            <div class="reg-two-col">
+              <el-form-item label="真实姓名">
+                <el-input v-model="regForm.realName" placeholder="请输入姓名" size="large" />
+              </el-form-item>
+              <el-form-item label="设置登录密码">
+                <el-input v-model="regForm.password" type="password" show-password placeholder="至少 6 位" size="large" />
+              </el-form-item>
+            </div>
+            <div class="reg-two-col">
+              <el-form-item label="所属代理商">
+                <el-select v-model="regForm.orgId" size="large" style="width: 100%" placeholder="选择所属服务商">
+                  <el-option v-for="d in dealers" :key="d.id" :label="d.name" :value="d.id" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="岗位角色">
+                <el-select v-model="regForm.roleCode" size="large" style="width: 100%">
+                  <el-option v-for="r in registerRoles" :key="r.code" :label="r.label" :value="r.code" />
+                </el-select>
+              </el-form-item>
+            </div>
+            <button class="submit-btn" type="button" :disabled="loading" @click="submitRegister">
+              {{ loading ? '正在注册…' : '校验短信并注册登录' }}
+            </button>
+          </el-form>
+        </div>
+
+        <footer class="panel-foot">
+          <span>Lumina 品牌总部</span>
+          <span class="mono">v1.0</span>
+        </footer>
+      </section>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { onMounted, onUnmounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { api } from '../utils/api';
@@ -107,27 +165,85 @@ import { useAuthStore } from '../stores/auth';
 const router = useRouter();
 const auth = useAuthStore();
 
-const form = ref({ username: 'admin', password: '123456' });
-const loading = ref(false);
-const demoAccounts = ref<Array<{ username: string; realName: string; orgName: string }>>([]);
+const mode = ref<'sms' | 'password' | 'register'>('sms');
+const form = ref({ username: '', password: '' });
+const smsForm = ref({ phone: '', code: '' });
+const regForm = ref({
+  phone: '',
+  code: '',
+  realName: '',
+  password: '',
+  orgId: '',
+  roleCode: 'SALES_REP',
+});
 
-const ladder = [
-  { label: '出厂赋码', note: '每一盒一个独立身份' },
-  { label: '总仓入库', note: '箱码扫一次，整箱展开' },
-  { label: '扫码出库', note: '出库码记到客户名下' },
-  { label: '机构签收', note: '流向逐层落账' },
-  { label: '顾客验真', note: '微信扫码认渠道' },
-];
+const loading = ref(false);
+const sendingSms = ref(false);
+const smsCooldown = ref(0);
+const smsNotice = ref('');
+const smsNoticeMode = ref<'LIVE' | 'MOCK'>('LIVE');
+
+let cooldownTimer: ReturnType<typeof setInterval> | null = null;
+
+const dealers = ref<Array<{ id: string; name: string; city?: string }>>([]);
+const registerRoles = ref<Array<{ code: string; label: string }>>([
+  { code: 'SALES_REP', label: '外勤销售 / 渠道业务员' },
+  { code: 'DEALER_WAREHOUSE', label: '服务商库管' },
+]);
+
+
+function switchMode(next: 'sms' | 'password' | 'register') {
+  mode.value = next;
+  smsNotice.value = '';
+}
+
+function startCooldown(sec = 60) {
+  if (cooldownTimer) clearInterval(cooldownTimer);
+  smsCooldown.value = sec;
+  cooldownTimer = setInterval(() => {
+    smsCooldown.value -= 1;
+    if (smsCooldown.value <= 0 && cooldownTimer) {
+      clearInterval(cooldownTimer);
+      cooldownTimer = null;
+    }
+  }, 1000);
+}
 
 onMounted(async () => {
   try {
-    demoAccounts.value = (await api.get('/auth/demo-accounts')) as unknown as typeof demoAccounts.value;
+    const opts = (await api.get('/auth/register-options')) as any;
+    dealers.value = opts.dealers || [];
+    if (opts.roles?.length) registerRoles.value = opts.roles;
+    if (dealers.value.length && !regForm.value.orgId) {
+      regForm.value.orgId = dealers.value[0].id;
+    }
   } catch {
-    // 演示账号接口不可用时仍可手工登录
+    // ignore
   }
 });
 
-async function submit() {
+onUnmounted(() => {
+  if (cooldownTimer) clearInterval(cooldownTimer);
+});
+
+async function handleSendSms(phone: string, scene: 'LOGIN' | 'REGISTER') {
+  const clean = phone.trim();
+  if (!/^1[3-9]\d{9}$/.test(clean)) {
+    return ElMessage.warning('请输入有效的 11 位手机号');
+  }
+  sendingSms.value = true;
+  try {
+    const res = (await api.post('/auth/sms/send', { phone: clean, scene })) as any;
+    startCooldown(res.cooldownSeconds || 60);
+    smsNoticeMode.value = res.mode === 'MOCK' ? 'MOCK' : 'LIVE';
+    smsNotice.value = res.message || '短信验证码已发送';
+    ElMessage.success(res.mode === 'MOCK' ? `演示验证码：${res.mockCode}` : '短信验证码已发送，请注意查收');
+  } finally {
+    sendingSms.value = false;
+  }
+}
+
+async function submitPassword() {
   loading.value = true;
   try {
     await auth.login(form.value.username, form.value.password);
@@ -138,64 +254,82 @@ async function submit() {
   }
 }
 
-async function quickLogin(username: string) {
-  form.value.username = username;
-  form.value.password = '123456';
-  await submit();
+async function submitSmsLogin() {
+  if (!/^1[3-9]\d{9}$/.test(smsForm.value.phone.trim())) {
+    return ElMessage.warning('请输入有效的 11 位手机号');
+  }
+  if (!/^\d{6}$/.test(smsForm.value.code.trim())) {
+    return ElMessage.warning('请输入 6 位数字短信验证码');
+  }
+  loading.value = true;
+  try {
+    const res = await auth.loginBySms(smsForm.value.phone.trim(), smsForm.value.code.trim());
+    ElMessage.success(res.isNewUser ? '首次短信验证，已自动注册并登录' : '短信验证登录成功');
+    router.push('/');
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function submitRegister() {
+  if (!/^1[3-9]\d{9}$/.test(regForm.value.phone.trim())) {
+    return ElMessage.warning('请输入有效的 11 位手机号');
+  }
+  if (!/^\d{6}$/.test(regForm.value.code.trim())) {
+    return ElMessage.warning('请输入 6 位数字短信验证码');
+  }
+  if (regForm.value.realName.trim().length < 2) {
+    return ElMessage.warning('请输入真实姓名（至少 2 个字）');
+  }
+  if (regForm.value.password.length < 6) {
+    return ElMessage.warning('请设置至少 6 位登录密码');
+  }
+  loading.value = true;
+  try {
+    await auth.registerBySms({
+      phone: regForm.value.phone.trim(),
+      code: regForm.value.code.trim(),
+      realName: regForm.value.realName.trim(),
+      password: regForm.value.password,
+      orgId: regForm.value.orgId || undefined,
+      roleCode: regForm.value.roleCode,
+    });
+    ElMessage.success('注册成功，已自动登录');
+    router.push('/');
+  } finally {
+    loading.value = false;
+  }
 }
 </script>
 
 <style scoped>
-.login-shell {
+.login-canvas {
   min-height: 100vh;
   display: grid;
-  grid-template-columns: minmax(0, 1.12fr) minmax(420px, 0.88fr);
-  background: var(--surface-2);
+  place-items: center;
+  padding: 32px 20px;
+  background: #ffffff;
 }
 
-/* ---------------- 叙事区 ---------------- */
+.login-card {
+  width: 100%;
+  max-width: 880px;
+  min-height: 540px;
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
+  border: 1px solid var(--border-hairline);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #ffffff;
+}
+
 .story {
-  position: relative;
-  background: var(--dark);
-  color: var(--dark-ink);
-  padding: 34px 48px 40px;
+  background: var(--bg-rail);
+  border-right: 1px solid var(--border-hairline);
+  padding: 36px 36px 30px;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
 }
-
-.story::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background-image: repeating-linear-gradient(
-      90deg,
-      transparent 0 31px,
-      rgba(255, 255, 255, 0.028) 31px 32px
-    );
-  pointer-events: none;
-}
-
-.story::after {
-  content: '';
-  position: absolute;
-  right: -140px;
-  top: 12%;
-  width: 420px;
-  height: 420px;
-  border-radius: 50%;
-  background: radial-gradient(circle, rgba(74, 155, 141, 0.22), transparent 62%);
-  pointer-events: none;
-}
-
-.story-top {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  position: relative;
-  z-index: 2;
-}
-
 .brand {
   display: flex;
   align-items: center;
@@ -204,169 +338,46 @@ async function quickLogin(username: string) {
 .brand-mark {
   width: 28px;
   height: 28px;
+  border-radius: 6px;
+  background: #111827;
+  color: #ffffff;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 2px;
-  padding: 5px 4px;
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 4px;
+  place-items: center;
 }
-.brand-mark span {
-  background: #cfe3dc;
-  border-radius: 1px;
-}
-.brand-mark span:nth-child(2) {
-  transform: scaleY(0.62);
-  align-self: center;
-}
-.brand-mark span:nth-child(3) {
-  transform: scaleY(0.8);
-  align-self: center;
+.brand-mark svg {
+  width: 16px;
+  height: 16px;
 }
 .brand-word {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 700;
-  letter-spacing: 0.18em;
-  color: #eef4f1;
+  letter-spacing: 0.12em;
+  color: var(--ink-primary);
 }
-.story-kicker {
-  font-size: 11.5px;
-  color: #7f9a94;
-  padding-left: 16px;
-  border-left: 1px solid rgba(255, 255, 255, 0.14);
-}
-
 .story-main {
   flex: 1;
   display: flex;
-  flex-direction: column;
-  justify-content: center;
-  max-width: 520px;
-  position: relative;
-  z-index: 2;
-  padding: 36px 0 28px;
+  align-items: center;
 }
-
 .story-title {
-  margin: 0 0 18px;
-  font-size: clamp(32px, 3.4vw, 46px);
-  line-height: 1.24;
-  font-weight: 600;
-  letter-spacing: -0.03em;
-  color: #f4f8f6;
-}
-
-.story-desc {
-  margin: 0 0 30px;
-  font-size: 13.5px;
-  line-height: 1.85;
-  color: #a9bdb8;
-  max-width: 44ch;
-}
-
-.ladder {
-  list-style: none;
   margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-}
-.ladder-step {
-  display: flex;
-  align-items: flex-start;
-  gap: 0;
-  position: relative;
-}
-.ladder-index {
-  width: 26px;
-  font-size: 10.5px;
-  color: #5f7a74;
-  padding-top: 4px;
-  letter-spacing: 0.04em;
-}
-.ladder-line {
-  width: 1px;
-  background: rgba(255, 255, 255, 0.12);
-  margin: 6px 14px 0 0;
-  align-self: stretch;
-  min-height: 30px;
-  position: relative;
-}
-.ladder-step::before {
-  content: '';
-  position: absolute;
-  left: 29px;
-  top: 7px;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: #4f8f85;
-  box-shadow: 0 0 0 3px rgba(79, 143, 133, 0.16);
-}
-.ladder-body {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  padding-bottom: 17px;
-}
-.ladder-label {
-  font-size: 13px;
-  color: #dfe9e6;
-  font-weight: 500;
-  min-width: 64px;
-}
-.ladder-note {
-  font-size: 11.5px;
-  color: #7f9a94;
-}
-
-/* 票根 */
-.ticket {
-  position: relative;
-  z-index: 2;
-  border: 1px dashed rgba(255, 255, 255, 0.2);
-  border-radius: 8px;
-  padding: 14px 16px 12px;
-  background: rgba(255, 255, 255, 0.035);
-  max-width: 340px;
-}
-.ticket-code {
-  font-size: 16px;
-  letter-spacing: 0.14em;
-  color: #e9f2ef;
+  font-size: 26px;
+  line-height: 1.4;
   font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ink-primary);
 }
-.ticket-meta {
-  margin-top: 5px;
-  font-size: 10.5px;
-  color: #78938d;
-  display: flex;
-  gap: 6px;
-}
-.ticket-sep {
-  color: #4d625e;
-}
-.ticket-cut {
-  height: 1px;
-  margin: 11px 0 9px;
-  background-image: linear-gradient(to right, rgba(255, 255, 255, 0.22) 0 4px, transparent 4px 8px);
-  background-size: 8px 1px;
-  background-repeat: repeat-x;
-}
-.ticket-foot {
-  font-size: 10.5px;
-  color: #6d8781;
+.story-foot {
+  font-size: 12px;
+  color: var(--ink-muted);
+  letter-spacing: 0.02em;
 }
 
-/* ---------------- 表单区 ---------------- */
 .panel {
-  background: var(--surface-2);
   display: flex;
   flex-direction: column;
-  padding: 32px 44px 20px;
-  border-left: 1px solid var(--line);
+  padding: 44px 52px 24px;
 }
-
 .panel-inner {
   flex: 1;
   width: 100%;
@@ -376,160 +387,166 @@ async function quickLogin(username: string) {
   flex-direction: column;
   justify-content: center;
 }
-
 .panel-head h2 {
   margin: 0 0 6px;
   font-size: 22px;
-  font-weight: 650;
-  letter-spacing: -0.02em;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 .panel-head p {
-  margin: 0 0 26px;
-  font-size: 12.5px;
-  color: var(--ink-2);
+  margin: 0 0 24px;
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+
+.mode-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  border-bottom: 1px solid var(--border-hairline);
+  margin-bottom: 22px;
+}
+.mode-tabs button {
+  border: 0;
+  background: transparent;
+  padding: 9px 4px 10px;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--ink-muted);
+  cursor: pointer;
+  font-family: inherit;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.mode-tabs button:hover {
+  color: var(--ink-primary);
+}
+.mode-tabs button.on {
+  color: var(--ink-primary);
+  font-weight: 600;
+  border-bottom-color: #111827;
 }
 
 .login-form :deep(.el-form-item) {
   margin-bottom: 16px;
 }
-
+.login-form :deep(.el-form-item__label) {
+  margin-bottom: 6px;
+}
+.sms-code-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+.sms-code-row :deep(.el-input) {
+  flex: 1;
+  min-width: 0;
+}
+.sms-send-btn {
+  flex-shrink: 0;
+  min-width: 108px;
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: #ffffff;
+  color: var(--ink-primary);
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.sms-send-btn:hover:not(:disabled) {
+  border-color: #9ca3af;
+  background: var(--bg-hover);
+}
+.sms-send-btn:disabled {
+  color: var(--ink-muted);
+  cursor: not-allowed;
+}
+.sms-notice {
+  margin: -4px 0 14px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.sms-notice.live {
+  background: var(--status-ok-bg);
+  border: 1px solid var(--status-ok-line);
+  color: var(--status-ok);
+}
+.sms-notice.mock {
+  background: var(--status-warn-bg);
+  border: 1px solid var(--status-warn-line);
+  color: var(--status-warn);
+}
+.reg-two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 10px;
+}
 .submit-btn {
   width: 100%;
   height: 42px;
   margin-top: 6px;
-  border: 1px solid var(--brand);
-  background: var(--brand);
-  color: #fff;
+  border: 0;
+  background: #111827;
+  color: #ffffff;
   border-radius: 6px;
   font-size: 14px;
   font-weight: 600;
   font-family: inherit;
-  letter-spacing: 0.02em;
   cursor: pointer;
   transition: background 0.15s ease;
 }
 .submit-btn:hover:not(:disabled) {
-  background: var(--brand-ink);
-  border-color: var(--brand-ink);
+  background: #1f2937;
 }
 .submit-btn:disabled {
-  opacity: 0.7;
+  background: #9ca3af;
   cursor: default;
 }
-
-.demo {
-  margin-top: 26px;
-  border-top: 1px solid var(--line);
-  padding-top: 16px;
-}
-.demo-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
+.sms-auto-tip {
+  margin: 12px 0 0;
+  text-align: center;
   font-size: 12px;
-  color: var(--ink-2);
-  margin-bottom: 8px;
+  color: var(--ink-muted);
 }
-.demo-hint {
-  font-size: 11px;
-  color: var(--ink-3);
-}
-.demo-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.demo-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 7px 8px;
-  border-radius: 5px;
-  border: 0;
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
-  font-family: inherit;
-  transition: background 0.13s ease;
-}
-.demo-row:hover {
-  background: var(--surface-3);
-}
-.demo-avatar {
-  width: 24px;
-  height: 24px;
-  border-radius: 4px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  display: grid;
-  place-items: center;
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--brand-ink);
-  flex-shrink: 0;
-}
-.demo-body {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-.demo-name {
-  font-size: 12.5px;
-  color: var(--ink);
-  font-weight: 500;
-}
-.demo-org {
-  font-size: 10.5px;
-  color: var(--ink-3);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.demo-arrow {
-  margin-left: auto;
-  color: var(--ink-3);
-  font-size: 12px;
-  opacity: 0;
-  transition: opacity 0.13s ease;
-}
-.demo-row:hover .demo-arrow {
-  opacity: 1;
-}
-
 .panel-foot {
   display: flex;
   justify-content: space-between;
-  font-size: 10.5px;
-  color: var(--ink-3);
-  border-top: 1px solid var(--line);
-  padding-top: 12px;
-  margin-top: 20px;
+  font-size: 11px;
+  color: var(--ink-muted);
+  padding-top: 16px;
+  margin-top: 24px;
 }
 
-@media (max-width: 960px) {
-  .login-shell {
+@media (max-width: 820px) {
+  .login-canvas {
+    padding: 0;
+    align-items: start;
+  }
+  .login-card {
     grid-template-columns: 1fr;
+    border: 0;
+    border-radius: 0;
+    min-height: 100vh;
   }
   .story {
-    padding: 22px 22px 24px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border-hairline);
+    padding: 20px;
   }
-  .story-main {
-    padding: 22px 0 18px;
-  }
-  .story-title {
-    font-size: 30px;
-  }
-  .story-desc {
-    margin-bottom: 18px;
-  }
-  .ladder,
-  .ticket,
-  .story-kicker {
+  .story-main,
+  .story-foot {
     display: none;
   }
   .panel {
-    border-left: 0;
-    padding: 26px 22px 18px;
+    padding: 28px 20px 18px;
+  }
+  .reg-two-col {
+    grid-template-columns: 1fr;
   }
 }
 </style>

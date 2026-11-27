@@ -31,6 +31,8 @@ import {
 import { PrismaService } from '../../common/prisma.module';
 import { EventsGateway } from '../../common/events.module';
 import { AuthUser, CurrentUser, Public } from '../../common/auth.decorators';
+import { normalizeScanCode } from '../../common/code-normalize';
+import { PageQuery, parsePagination } from '../../common/pagination';
 
 const TRACE_SECRET =
   process.env.TRACE_HMAC_SECRET || 'lumina_trace_hmac_secret_key_change_in_prod_2026';
@@ -51,7 +53,23 @@ export class TraceService {
     return cfg.verifyBaseUrl || process.env.VERIFY_BASE_URL || 'http://localhost:5174/v';
   }
 
-  async listBatches() {
+  async listBatches(pq?: PageQuery) {
+    const pg = parsePagination(pq, 20);
+    if (pg.enabled) {
+      const [total, items] = await Promise.all([
+        this.prisma.codeBatch.count(),
+        this.prisma.codeBatch.findMany({
+          include: {
+            product: { include: { brand: true } },
+            _count: { select: { codes: true } },
+          },
+          orderBy: { createdAt: 'desc' },
+          skip: pg.skip,
+          take: pg.pageSize,
+        }),
+      ]);
+      return { items, total, page: pg.page, pageSize: pg.pageSize };
+    }
     return this.prisma.codeBatch.findMany({
       include: {
         product: { include: { brand: true } },
@@ -177,23 +195,29 @@ export class TraceService {
     };
   }
 
-  async getBatchCodes(batchId: string) {
+  async getBatchCodes(batchId: string, pq?: PageQuery, unlimited = false) {
     const batch = await this.prisma.codeBatch.findUnique({
       where: { id: batchId },
       include: { product: { include: { brand: true } } },
     });
     if (!batch) throw new NotFoundException('批次不存在');
     const verifyBaseUrl = await this.getVerifyBaseUrl();
+    const pg = parsePagination(pq, 50, 500);
+    const total = await this.prisma.traceCode.count({ where: { batchId } });
 
     const codes = await this.prisma.traceCode.findMany({
       where: { batchId },
       include: { parent: { select: { codeToken: true } } },
       orderBy: [{ codeLevel: 'asc' }, { createdAt: 'asc' }],
-      take: 500,
+      skip: !unlimited && pg.enabled ? pg.skip : undefined,
+      take: unlimited ? undefined : pg.enabled ? pg.pageSize : 500,
     });
 
     return {
       batch,
+      total,
+      page: pg.enabled ? pg.page : 1,
+      pageSize: pg.enabled ? pg.pageSize : codes.length,
       codes: codes.map((c) => ({
         ...c,
         verifyUrl: buildVerifyUrl(verifyBaseUrl, c.codeToken),
@@ -203,7 +227,7 @@ export class TraceService {
   }
 
   async exportBatchCsv(batchId: string): Promise<{ filename: string; csv: string }> {
-    const { batch, codes } = await this.getBatchCodes(batchId);
+    const { batch, codes } = await this.getBatchCodes(batchId, undefined, true);
     const header = [
       '批次号',
       '商品货号',
@@ -297,10 +321,11 @@ export class TraceService {
 
   /**
    * Full lifecycle timeline lookup for HQ / Dealer auditing.
+   * Supports both 16-char Lumina HMAC trace codes and warehouse scan-registered product barcodes.
    */
   async getCodeTimeline(rawInput: string) {
-    const token = extractTokenFromScanInput(rawInput);
-    if (!token) throw new BadRequestException('无法识别的防伪溯源码格式');
+    const token = normalizeScanCode(rawInput);
+    if (!token) throw new BadRequestException('无法识别的产品码 / 防伪溯源码格式');
 
     const sig = verifyTraceTokenSignature(token, TRACE_SECRET);
     const code = await this.prisma.traceCode.findUnique({
@@ -316,7 +341,7 @@ export class TraceService {
     });
     if (!code) {
       throw new NotFoundException(
-        sig.valid ? '验签合法但数据库未收录该码' : '该防伪码签名校验失败，疑似伪造假码！',
+        sig.valid ? '验签合法但数据库未收录该码' : '系统中未查询到该产品码记录',
       );
     }
 
@@ -337,9 +362,284 @@ export class TraceService {
 
     return {
       signatureValid: sig.valid,
+      isRegisteredExternal: !sig.valid,
       code,
       assignedDealer: dealer,
       targetClinic: clinic,
+    };
+  }
+
+  /**
+   * Multi-criteria product flow query (by product code, dealer, date range, event type, product).
+   */
+  async queryFlows(
+    user: AuthUser,
+    query: {
+      code?: string;
+      dealerId?: string;
+      productId?: string;
+      eventType?: string;
+      startDate?: string;
+      endDate?: string;
+      page?: number;
+      pageSize?: number;
+    },
+  ) {
+    const page = Math.max(1, Number(query.page) || 1);
+    const pageSize = Math.min(200, Math.max(1, Number(query.pageSize) || 50));
+
+    const cleanCode = query.code?.trim().replace(/\s+/g, '') || '';
+    const effectiveDealerId = user.orgType !== 'HQ' ? user.orgId : query.dealerId?.trim() || '';
+
+    const where: any = {};
+    const traceCodeFilter: any = {};
+
+    if (cleanCode) {
+      const normalized = normalizeScanCode(cleanCode) || cleanCode.toUpperCase();
+      traceCodeFilter.codeToken = { contains: normalized, mode: 'insensitive' };
+    }
+    if (query.productId?.trim()) {
+      traceCodeFilter.productId = query.productId.trim();
+    }
+    if (Object.keys(traceCodeFilter).length > 0) {
+      where.traceCode = traceCodeFilter;
+    }
+
+    if (query.eventType?.trim()) {
+      where.eventType = query.eventType.trim();
+    }
+
+    if (effectiveDealerId) {
+      where.OR = [
+        { toOrgId: effectiveDealerId },
+        { fromOrgId: effectiveDealerId },
+        { traceCode: { assignedDealerId: effectiveDealerId } },
+      ];
+    }
+
+    if (query.startDate || query.endDate) {
+      const occurredAt: any = {};
+      if (query.startDate) {
+        const start = new Date(`${query.startDate.slice(0, 10)}T00:00:00+08:00`);
+        if (!Number.isNaN(start.getTime())) occurredAt.gte = start;
+      }
+      if (query.endDate) {
+        const end = new Date(`${query.endDate.slice(0, 10)}T23:59:59.999+08:00`);
+        if (!Number.isNaN(end.getTime())) occurredAt.lte = end;
+      }
+      if (Object.keys(occurredAt).length > 0) {
+        where.occurredAt = occurredAt;
+      }
+    }
+
+    const [total, events, inboundCount, outboundCount, uniqueCodeRows] = await Promise.all([
+      this.prisma.traceEvent.count({ where }),
+      this.prisma.traceEvent.findMany({
+        where,
+        include: {
+          traceCode: {
+            include: {
+              product: { select: { id: true, name: true, skuCode: true, spec: true } },
+              batch: { select: { id: true, batchNo: true } },
+            },
+          },
+        },
+        orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      this.prisma.traceEvent.count({
+        where: {
+          AND: [
+            where,
+            { eventType: { in: [TraceEventType.HQ_INBOUND, TraceEventType.DEALER_INBOUND] } },
+          ],
+        },
+      }),
+      this.prisma.traceEvent.count({
+        where: {
+          AND: [
+            where,
+            { eventType: { in: [TraceEventType.HQ_OUTBOUND, TraceEventType.DEALER_OUTBOUND] } },
+          ],
+        },
+      }),
+      this.prisma.traceEvent.findMany({
+        where,
+        select: { traceCodeId: true },
+        distinct: ['traceCodeId'],
+      }),
+    ]);
+
+    const orgIds = new Set<string>();
+    const clinicIds = new Set<string>();
+    const whIds = new Set<string>();
+    const userIds = new Set<string>();
+
+    for (const ev of events) {
+      if (ev.fromOrgId) orgIds.add(ev.fromOrgId);
+      if (ev.toOrgId) orgIds.add(ev.toOrgId);
+      if (ev.traceCode.assignedDealerId) orgIds.add(ev.traceCode.assignedDealerId);
+      if (ev.clinicId) clinicIds.add(ev.clinicId);
+      if (ev.traceCode.targetClinicId) clinicIds.add(ev.traceCode.targetClinicId);
+      if (ev.warehouseId) whIds.add(ev.warehouseId);
+      if (ev.operatorId) userIds.add(ev.operatorId);
+    }
+
+    const [orgs, clinics, warehouses, users] = await Promise.all([
+      orgIds.size
+        ? this.prisma.organization.findMany({
+            where: { id: { in: Array.from(orgIds) } },
+            select: { id: true, name: true, code: true, type: true },
+          })
+        : [],
+      clinicIds.size
+        ? this.prisma.clinic.findMany({
+            where: { id: { in: Array.from(clinicIds) } },
+            select: { id: true, name: true, city: true },
+          })
+        : [],
+      whIds.size
+        ? this.prisma.warehouse.findMany({
+            where: { id: { in: Array.from(whIds) } },
+            select: { id: true, name: true },
+          })
+        : [],
+      userIds.size
+        ? this.prisma.user.findMany({
+            where: { id: { in: Array.from(userIds) } },
+            select: { id: true, realName: true, username: true },
+          })
+        : [],
+    ]);
+
+    const orgMap = new Map(orgs.map((o) => [o.id, o]));
+    const clinicMap = new Map(clinics.map((c) => [c.id, c]));
+    const whMap = new Map(warehouses.map((w) => [w.id, w]));
+    const userMap = new Map(users.map((u) => [u.id, u]));
+
+    const items = events.map((ev) => {
+      const dealerOrg =
+        (ev.traceCode.assignedDealerId ? orgMap.get(ev.traceCode.assignedDealerId) : null) ||
+        (ev.toOrgId && orgMap.get(ev.toOrgId)?.type === 'DEALER' ? orgMap.get(ev.toOrgId) : null) ||
+        (ev.fromOrgId && orgMap.get(ev.fromOrgId)?.type === 'DEALER' ? orgMap.get(ev.fromOrgId) : null) ||
+        null;
+      const clinic =
+        (ev.clinicId ? clinicMap.get(ev.clinicId) : null) ||
+        (ev.traceCode.targetClinicId ? clinicMap.get(ev.traceCode.targetClinicId) : null) ||
+        null;
+
+      return {
+        id: ev.id,
+        eventType: ev.eventType,
+        occurredAt: ev.occurredAt,
+        docNo: ev.docNo,
+        remark: ev.remark,
+        codeToken: ev.traceCode.codeToken,
+        codeLevel: ev.traceCode.codeLevel,
+        codeStatus: ev.traceCode.status,
+        batchNo: ev.traceCode.batch.batchNo,
+        product: ev.traceCode.product,
+        dealer: dealerOrg,
+        clinic,
+        warehouse: ev.warehouseId ? whMap.get(ev.warehouseId) || null : null,
+        operator: ev.operatorId ? userMap.get(ev.operatorId) || null : null,
+      };
+    });
+
+    return {
+      total,
+      page,
+      pageSize,
+      summary: {
+        totalEvents: total,
+        uniqueCodes: uniqueCodeRows.length,
+        inboundCount,
+        outboundCount,
+      },
+      items,
+    };
+  }
+
+  async exportFlowsCsv(
+    user: AuthUser,
+    query: {
+      code?: string;
+      dealerId?: string;
+      productId?: string;
+      eventType?: string;
+      startDate?: string;
+      endDate?: string;
+    },
+  ): Promise<{ filename: string; csv: string }> {
+    const data = await this.queryFlows(user, { ...query, page: 1, pageSize: 200 });
+    const fmtCn = (dt: Date) => {
+      const parts = new Intl.DateTimeFormat('zh-CN', {
+        timeZone: 'Asia/Shanghai',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+      }).formatToParts(new Date(dt));
+      const g = (t: string) => parts.find((p) => p.type === t)?.value || '';
+      return `${g('year')}-${g('month')}-${g('day')} ${g('hour')}:${g('minute')}:${g('second')}`;
+    };
+    const eventNames: Record<string, string> = {
+      BATCH_GENERATED: '赋码建档',
+      HQ_INBOUND: '总仓入库',
+      HQ_OUTBOUND: '出库绑定代理商',
+      DEALER_INBOUND: '代理商收货',
+      DEALER_OUTBOUND: '出库至终端机构',
+      CARTON_UNPACKED: '外箱拆零',
+      RETURN_TO_DEALER: '退回代理商仓',
+      RETURN_TO_HQ: '退回总仓',
+      CONSUMER_VERIFIED: '顾客扫码验真',
+    };
+    const header = [
+      '时间(北京时间)',
+      '流向节点',
+      '产品码',
+      '码级别',
+      '商品名称',
+      '货号',
+      '批次号',
+      '绑定代理商',
+      '终端机构',
+      '仓库',
+      '单号',
+      '操作人',
+      '说明',
+    ];
+    const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const lines = [header.join(',')];
+    for (const it of data.items) {
+      lines.push(
+        [
+          fmtCn(it.occurredAt),
+          eventNames[it.eventType] || it.eventType,
+          it.codeToken,
+          it.codeLevel === 'CARTON' ? '外箱' : '单盒',
+          it.product.name,
+          it.product.skuCode,
+          it.batchNo,
+          it.dealer?.name || '',
+          it.clinic?.name || '',
+          it.warehouse?.name || '',
+          it.docNo || '',
+          it.operator?.realName || '',
+          it.remark || '',
+        ]
+          .map(esc)
+          .join(','),
+      );
+    }
+    const ymd = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    return {
+      filename: `lumina_trace_flows_${ymd}.csv`,
+      csv: '\uFEFF' + lines.join('\n'),
     };
   }
 
@@ -506,18 +806,33 @@ export class TraceService {
       });
     }
 
+    const fmtCnTime = (dt: Date) => {
+      const parts = new Intl.DateTimeFormat('zh-CN', {
+        timeZone: 'Asia/Shanghai',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }).formatToParts(dt);
+      const get = (t: string) => parts.find((p) => p.type === t)?.value || '';
+      return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')}`;
+    };
+
     let riskLevel: 'FIRST_AUTH' | 'REPEAT_OK' | 'HIGH_FREQ_WARNING' = 'FIRST_AUTH';
     let headline = '官方正品 · 首次防伪认证通过';
     let subMessage = '本盒产品为品牌官方正规渠道出厂正品，请放心使用。';
+    const firstVerifyText = fmtCnTime(code.firstVerifyAt ?? now);
 
     if (isHighFreq) {
       riskLevel = 'HIGH_FREQ_WARNING';
       headline = `高频查验预警 · 已被查询 ${nextSeq} 次`;
-      subMessage = `该防伪码查验次数异常偏高（首次查验：${(code.firstVerifyAt ?? now).toISOString().slice(0, 16).replace('T', ' ')}），谨防复制假码或二次回收包材。`;
+      subMessage = `该防伪码查验次数异常偏高（首次查验：${firstVerifyText}），谨防复制假码或二次回收包材。`;
     } else if (nextSeq > 1) {
       riskLevel = 'REPEAT_OK';
       headline = `官方正品 · 第 ${nextSeq} 次防伪查询`;
-      subMessage = `首次验证时间：${(code.firstVerifyAt ?? now).toISOString().slice(0, 16).replace('T', ' ')}（${code.firstVerifyCity ?? detectedCity}），如非本人重复查询请注意核实。`;
+      subMessage = `首次验证时间：${firstVerifyText}（${code.firstVerifyCity ?? detectedCity}），如非本人重复查询请注意核实。`;
     }
 
     const retailPrice = Number(code.product.retailPrice);
@@ -574,6 +889,11 @@ export class TraceService {
     contact?: string;
     remark?: string;
   }) {
+    const paidPrice = Number(body.paidPrice);
+    if (!Number.isFinite(paidPrice) || paidPrice <= 0 || paidPrice > 1_000_000) {
+      throw new BadRequestException('实付价格必须为大于 0 的有效金额');
+    }
+    body.paidPrice = Number(paidPrice.toFixed(2));
     const token = extractTokenFromScanInput(body.codeToken) || body.codeToken;
     const code = await this.prisma.traceCode.findUnique({
       where: { codeToken: token },
@@ -618,15 +938,30 @@ export class TraceService {
     };
   }
 
-  async listAlerts(user: AuthUser, status?: string) {
+  async listAlerts(user: AuthUser, status?: string, pq?: PageQuery) {
+    const where = {
+      ...(user.orgType !== 'HQ' ? { orgId: user.orgId } : {}),
+      ...(status ? { status } : {}),
+    };
+    const pg = parsePagination(pq, 20);
+    if (pg.enabled) {
+      const [total, items] = await Promise.all([
+        this.prisma.antiFleeingAlert.count({ where }),
+        this.prisma.antiFleeingAlert.findMany({
+          where,
+          include: { org: { select: { id: true, name: true, code: true } } },
+          orderBy: { createdAt: 'desc' },
+          skip: pg.skip,
+          take: pg.pageSize,
+        }),
+      ]);
+      return { items, total, page: pg.page, pageSize: pg.pageSize };
+    }
     return this.prisma.antiFleeingAlert.findMany({
-      where: {
-        ...(user.orgType !== 'HQ' ? { orgId: user.orgId } : {}),
-        ...(status ? { status } : {}),
-      },
+      where,
       include: { org: { select: { id: true, name: true, code: true } } },
       orderBy: { createdAt: 'desc' },
-      take: 100,
+      take: 200,
     });
   }
 
@@ -655,8 +990,15 @@ export class TraceController {
   constructor(private readonly traceService: TraceService) {}
 
   @Get('trace/batches')
-  listBatches() {
-    return this.traceService.listBatches();
+  listBatches(
+    @CurrentUser() user: AuthUser,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    if (user.orgType !== 'HQ') {
+      throw new ForbiddenException('仅品牌总部可查看生产防伪批次');
+    }
+    return this.traceService.listBatches({ page, pageSize });
   }
 
   @Post('trace/batches')
@@ -678,12 +1020,27 @@ export class TraceController {
   }
 
   @Get('trace/batches/:id/codes')
-  getBatchCodes(@Param('id') id: string) {
-    return this.traceService.getBatchCodes(id);
+  getBatchCodes(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    if (user.orgType !== 'HQ') {
+      throw new ForbiddenException('仅品牌总部可查看生产防伪批次码');
+    }
+    return this.traceService.getBatchCodes(id, { page, pageSize });
   }
 
   @Get('trace/batches/:id/export')
-  async exportBatchCsv(@Param('id') id: string, @Res() res: Response) {
+  async exportBatchCsv(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Res() res: Response,
+  ) {
+    if (user.orgType !== 'HQ') {
+      throw new ForbiddenException('仅品牌总部可导出生产防伪码 CSV');
+    }
     const { filename, csv } = await this.traceService.exportBatchCsv(id);
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
@@ -698,14 +1055,67 @@ export class TraceController {
     return this.traceService.bindCarton(user, body.cartonCode, body.unitCodes || []);
   }
 
+  @Get('trace/flows')
+  queryFlows(
+    @CurrentUser() user: AuthUser,
+    @Query('code') code?: string,
+    @Query('dealerId') dealerId?: string,
+    @Query('productId') productId?: string,
+    @Query('eventType') eventType?: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    return this.traceService.queryFlows(user, {
+      code,
+      dealerId,
+      productId,
+      eventType,
+      startDate,
+      endDate,
+      page: page ? Number(page) : 1,
+      pageSize: pageSize ? Number(pageSize) : 50,
+    });
+  }
+
+  @Get('trace/flows/export')
+  async exportFlows(
+    @CurrentUser() user: AuthUser,
+    @Query('code') code: string | undefined,
+    @Query('dealerId') dealerId: string | undefined,
+    @Query('productId') productId: string | undefined,
+    @Query('eventType') eventType: string | undefined,
+    @Query('startDate') startDate: string | undefined,
+    @Query('endDate') endDate: string | undefined,
+    @Res() res: Response,
+  ) {
+    const { filename, csv } = await this.traceService.exportFlowsCsv(user, {
+      code,
+      dealerId,
+      productId,
+      eventType,
+      startDate,
+      endDate,
+    });
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
+    res.send(csv);
+  }
+
   @Get('trace/codes/:rawInput/timeline')
   timeline(@Param('rawInput') rawInput: string) {
     return this.traceService.getCodeTimeline(decodeURIComponent(rawInput));
   }
 
   @Get('trace/alerts')
-  alerts(@CurrentUser() user: AuthUser, @Query('status') status?: string) {
-    return this.traceService.listAlerts(user, status);
+  alerts(
+    @CurrentUser() user: AuthUser,
+    @Query('status') status?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    return this.traceService.listAlerts(user, status, { page, pageSize });
   }
 
   @Patch('trace/alerts/:id/resolve')

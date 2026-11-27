@@ -1,8 +1,8 @@
 <template>
   <el-dialog
     :model-value="modelValue"
-    width="1000px"
-    top="4vh"
+    width="min(960px, 94vw)"
+    top="3vh"
     class="print-dialog"
     :show-close="true"
     @close="emit('update:modelValue', false)"
@@ -14,11 +14,13 @@
           <div class="pd-title">打印预览</div>
         </div>
         <div class="pd-controls">
-          <el-select v-model="selectedTemplateId" size="default" style="width: 280px">
+          <el-select v-model="selectedTemplateId" size="default" class="pd-tpl-select">
             <el-option v-for="t in payload?.templates || []" :key="t.id" :label="t.name" :value="t.id" />
           </el-select>
-          <el-input-number v-model="copies" :min="1" :max="5" size="default" controls-position="right" style="width: 100px" />
-          <span class="pd-copies">份</span>
+          <div class="pd-copies-wrap">
+            <el-input-number v-model="copies" :min="1" :max="5" size="default" controls-position="right" style="width: 92px" />
+            <span class="pd-copies">份</span>
+          </div>
         </div>
       </div>
     </template>
@@ -212,9 +214,9 @@ const isNeedlePaper = computed(() =>
 
 const sheetStyle = computed(() => {
   const pt = activeTemplate.value?.paperType;
-  if (pt === '241x93') return { width: '780px', minHeight: '340px' };
-  if (pt === 'A4') return { width: '760px', minHeight: '620px' };
-  return { width: '780px', minHeight: '470px' };
+  if (pt === '241x93') return { width: '760px', minHeight: '300px' };
+  if (pt === 'A4') return { width: '740px', minHeight: '480px' };
+  return { width: '760px', minHeight: '380px' };
 });
 
 const hasCol = (k: string) => activeTemplate.value?.visibleColumns?.includes(k) ?? true;
@@ -250,26 +252,37 @@ async function doBrowserPrint() {
 <style scoped>
 .pd-head {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 12px 16px;
   flex-wrap: wrap;
-  padding-right: 28px;
 }
 .pd-kicker {
-  font-size: 10.5px;
-  letter-spacing: 0.12em;
+  font-size: 11px;
+  letter-spacing: 0.04em;
   color: var(--ink-3);
 }
 .pd-title {
-  font-size: 17px;
-  font-weight: 650;
-  margin-top: 3px;
+  font-size: 16px;
+  font-weight: 600;
+  margin-top: 2px;
 }
 .pd-controls {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+.pd-tpl-select {
+  width: 260px;
+  max-width: 100%;
+}
+.pd-copies-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
 }
 .pd-copies {
   font-size: 12px;
@@ -318,24 +331,24 @@ async function doBrowserPrint() {
 
 .preview-stage {
   background: #e8e5db;
-  padding: 24px;
+  padding: 16px;
   border-radius: 8px;
-  overflow-x: auto;
-  display: flex;
-  justify-content: center;
+  overflow: auto;
+  max-height: 52vh;
   border: 1px solid var(--line);
 }
 
 .paper-sheet {
+  margin: 0 auto;
   background: #fff;
-  color: #111;
-  padding: 22px 26px;
-  box-shadow: 0 10px 26px rgba(23, 33, 31, 0.14);
+  color: #17211f;
+  padding: 20px 24px;
+  box-shadow: 0 8px 22px rgba(23, 33, 31, 0.12);
   border: 1px solid #d3cec1;
   display: flex;
   flex-direction: column;
   position: relative;
-  font-family: 'Songti SC', 'SimSun', var(--font-ui);
+  font-family: var(--font-ui);
 }
 .paper-sheet.needle-paper {
   padding-left: 36px;
@@ -417,9 +430,25 @@ async function doBrowserPrint() {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 .pd-foot-right {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
+}
+@media (max-width: 640px) {
+  .pd-controls {
+    width: 100%;
+  }
+  .pd-tpl-select {
+    width: 100%;
+    flex: 1 1 180px;
+  }
+  .preview-stage {
+    padding: 10px;
+    max-height: 48vh;
+  }
 }
 </style>

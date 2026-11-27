@@ -2,484 +2,575 @@
   <div class="page">
     <div class="page-header">
       <div>
-        <h1 class="page-title">{{ greeting }}，{{ auth.user?.realName?.replace(/（.*?）/g, '') }}</h1>
+        <h1 class="page-title">总控台</h1>
         <p class="page-subtitle">
-          {{ todayLabel }} · 今天有 {{ data?.kpis.pendingOutboundCount ?? 0 }} 张出库单待扫，{{
-            data?.kpis.openAlertsCount ?? 0
-          }} 条流向预警待处置。
+          待处理：{{ data?.kpis.pendingOutboundCount ?? 0 }} 单待扫码出库 · {{ unresolvedAlerts.length }} 条未结案预警
         </p>
       </div>
       <div class="page-actions">
-        <el-button @click="loadData">刷新</el-button>
-        <el-button type="primary" @click="router.push('/purchase')">扫码入库</el-button>
+        <el-button @click="exportLedger">导出台账</el-button>
+        <el-button type="primary" @click="router.push('/purchase')">扫码入库建档</el-button>
       </div>
     </div>
 
     <template v-if="data">
-      <!-- 指标 -->
+      <!-- 无框数字带 -->
       <div class="kpi-grid">
-        <div class="kpi-cell" :class="{ accent: data.kpis.pendingOutboundCount > 0 }">
-          <div class="kpi-label">待扫码出库</div>
+        <div class="kpi-cell" :class="{ warn: data.kpis.pendingOutboundCount > 0 }">
+          <div class="kpi-label"><span class="signal-dot" :class="{ warn: data.kpis.pendingOutboundCount > 0 }" />待扫码出库</div>
           <div class="kpi-value">{{ data.kpis.pendingOutboundCount }}<span class="unit">单</span></div>
-          <div class="kpi-meta">出库时逐码绑定到客户名下</div>
+          <div class="kpi-meta">待逐码绑定客户</div>
+        </div>
+        <div class="kpi-cell" :class="{ danger: unresolvedAlerts.length > 0 }">
+          <div class="kpi-label"><span class="signal-dot" :class="{ danger: unresolvedAlerts.length > 0 }" />待处置预警</div>
+          <div class="kpi-value">{{ unresolvedAlerts.length }}<span class="unit">条</span></div>
+          <div class="kpi-meta">跨区窜货 / 破价 / 账实差异</div>
         </div>
         <div class="kpi-cell">
           <div class="kpi-label">当前在库</div>
           <div class="kpi-value">{{ inStockQty }}<span class="unit">盒</span></div>
-          <div class="kpi-meta">{{ warehouseCount }} 个仓库 · 可穿透到每一盒</div>
+          <div class="kpi-meta">{{ warehouseCount }} 个仓库 · 支持单品级溯源</div>
         </div>
         <div class="kpi-cell">
           <div class="kpi-label">累计供货额</div>
-          <div class="kpi-value">¥{{ data.kpis.totalSalesAmount.toLocaleString() }}</div>
-          <div class="kpi-meta">
-            毛利 ¥{{ data.kpis.grossProfit.toLocaleString() }} · 毛利率 {{ data.kpis.grossMarginPercent }}%
-          </div>
-        </div>
-        <div class="kpi-cell" :class="{ accent: data.kpis.openAlertsCount > 0 }">
-          <div class="kpi-label">待处置预警</div>
-          <div class="kpi-value">{{ data.kpis.openAlertsCount }}<span class="unit">条</span></div>
-          <div class="kpi-meta">跨区窜货 / 破价 / 账实差异</div>
+          <div class="kpi-value">¥{{ data.kpis.totalSalesAmount.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}</div>
+          <div class="kpi-meta">毛利率 {{ data.kpis.grossMarginPercent }}%</div>
         </div>
       </div>
 
-      <!-- 码链 -->
-      <section class="chain-card">
-        <div class="chain-head">
-          <h2 class="section-title">一物一码流向</h2>
-          <span class="section-note">从工厂到顾客，五道关口全部留痕</span>
+      <!-- 唯一视觉中心：待处理工作台 -->
+      <section class="workbench">
+        <div class="wb-tabs" role="tablist">
+          <button
+            v-for="t in tabs"
+            :key="t.key"
+            type="button"
+            class="wb-tab"
+            :class="{ on: tab === t.key }"
+            @click="switchTab(t.key)"
+          >
+            {{ t.label }}
+            <span class="wb-count" :class="t.tone">{{ t.count }}</span>
+          </button>
         </div>
-        <CodeChain :stages="chainStages" />
+
+        <div class="bulk-bar">
+          <div class="bulk-left">
+            <el-select v-if="tab === 'orders'" v-model="orderStatus" clearable size="small" placeholder="全部状态" style="width: 130px">
+              <el-option label="待扫码" value="PENDING_OUTBOUND" />
+              <el-option label="部分出库" value="PARTIAL_OUTBOUND" />
+              <el-option label="红线待特批" value="PENDING_APPROVAL" />
+            </el-select>
+            <el-select v-else-if="tab === 'alerts'" v-model="alertSeverity" clearable size="small" placeholder="全部级别" style="width: 130px">
+              <el-option label="CRITICAL" value="CRITICAL" />
+              <el-option label="HIGH" value="HIGH" />
+              <el-option label="MEDIUM" value="MEDIUM" />
+              <el-option label="LOW" value="LOW" />
+            </el-select>
+            <el-select v-else v-model="clinicWindow" size="small" style="width: 130px">
+              <el-option label="30 天内" :value="30" />
+              <el-option label="15 天内" :value="15" />
+              <el-option label="7 天内" :value="7" />
+            </el-select>
+            <el-input
+              v-model="keyword"
+              size="small"
+              clearable
+              :placeholder="tab === 'orders' ? '搜索单号 / 客户' : tab === 'alerts' ? '搜索标题 / 组织 / 防伪码' : '搜索机构 / 归属'"
+              style="width: 220px"
+            />
+          </div>
+          <div class="bulk-right">
+            <span class="bulk-count">已选 <strong>{{ selection.length }}</strong> 项</span>
+            <el-button v-if="tab === 'orders'" size="small" :disabled="!selection.length" @click="printPicking">批量打印拣货单</el-button>
+            <el-button size="small" @click="exportCsv">导出 CSV</el-button>
+          </div>
+        </div>
+
+        <!-- 待扫码出库 -->
+        <el-table
+          v-if="tab === 'orders'"
+          :data="filteredOrders"
+          size="small"
+          style="width: 100%"
+          row-key="id"
+          empty-text="暂无待出库订单，销售在手机端下单后会实时出现在这里"
+          @selection-change="onSelect"
+        >
+          <el-table-column type="selection" width="44" />
+          <el-table-column label="单号" width="160">
+            <template #default="{ row }"><span class="mono doc">{{ row.docNo }}</span></template>
+          </el-table-column>
+          <el-table-column label="客户 / 场景" min-width="220">
+            <template #default="{ row }">
+              <div class="cell-strong">{{ row.buyerOrg?.name || row.clinic?.name || '—' }}</div>
+              <div class="cell-sub">{{ row.orderScene === 'HQ_TO_DEALER' ? '总仓 → 服务商' : '服务商 → 机构' }} · {{ row.warehouse?.name || '默认仓' }}</div>
+            </template>
+          </el-table-column>
+          <el-table-column label="数量" width="90" align="right">
+            <template #default="{ row }"><span class="num">{{ qtyOf(row) }} 盒</span></template>
+          </el-table-column>
+          <el-table-column label="金额" width="120" align="right">
+            <template #default="{ row }"><span class="num">¥{{ Number(row.totalAmount).toFixed(2) }}</span></template>
+          </el-table-column>
+          <el-table-column label="状态" width="112">
+            <template #default="{ row }">
+              <span class="status-tag" :class="row.status === 'PENDING_APPROVAL' ? 'danger' : 'warn'">
+                {{ orderStatusLabel(row.status) }}
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="96" align="right">
+            <template #default="{ row }">
+              <el-button size="small" link @click="openOrder(row)">{{ row.status === 'PENDING_APPROVAL' ? '去审批' : '去扫码' }}</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <!-- 合规与窜货预警 -->
+        <el-table
+          v-else-if="tab === 'alerts'"
+          :data="filteredAlerts"
+          size="small"
+          style="width: 100%"
+          row-key="id"
+          empty-text="渠道流向健康，暂无未结案预警"
+          @selection-change="onSelect"
+        >
+          <el-table-column type="selection" width="44" />
+          <el-table-column label="级别" width="96">
+            <template #default="{ row }">
+              <span class="status-tag" :class="['CRITICAL', 'HIGH'].includes(row.severity) ? 'danger' : 'warn'">{{ row.severity }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="预警" min-width="260">
+            <template #default="{ row }">
+              <div class="cell-strong">{{ row.title }}</div>
+              <div class="cell-sub">{{ alertTypeLabel(row.alertType) }} · {{ row.org?.name || '总部 / 未知' }}</div>
+            </template>
+          </el-table-column>
+          <el-table-column label="防伪码 / 单号" width="180">
+            <template #default="{ row }">
+              <span v-if="row.traceCodeToken" class="mono cell-sub">{{ row.traceCodeToken }}</span>
+              <span v-else-if="row.docNo" class="mono cell-sub">{{ row.docNo }}</span>
+              <span v-else class="cell-sub">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="发生时间" width="140">
+            <template #default="{ row }"><span class="mono cell-sub">{{ fmt(row.createdAt) }}</span></template>
+          </el-table-column>
+          <el-table-column label="操作" width="96" align="right">
+            <template #default>
+              <el-button size="small" link @click="router.push({ path: '/trace', query: { tab: 'alerts' } })">去处置</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <!-- 保护期临期 -->
+        <el-table
+          v-else
+          :data="filteredClinics"
+          size="small"
+          style="width: 100%"
+          row-key="id"
+          empty-text="当前窗口内没有临期机构"
+          @selection-change="onSelect"
+        >
+          <el-table-column type="selection" width="44" />
+          <el-table-column label="机构" min-width="220">
+            <template #default="{ row }">
+              <div class="cell-strong">{{ row.name }}</div>
+              <div class="cell-sub">{{ row.city || '—' }}</div>
+            </template>
+          </el-table-column>
+          <el-table-column label="归属服务商" min-width="180">
+            <template #default="{ row }">{{ row.ownerOrg?.name || '总部直营' }}</template>
+          </el-table-column>
+          <el-table-column label="到期类型" width="150">
+            <template #default="{ row }"><span class="cell-sub">{{ row.warnType }}</span></template>
+          </el-table-column>
+          <el-table-column label="剩余" width="96" align="right">
+            <template #default="{ row }">
+              <span class="num days" :class="{ urgent: row.daysLeft <= 15 }">{{ row.daysLeft }} 天</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="96" align="right">
+            <template #default>
+              <el-button size="small" link @click="router.push('/channels')">去跟进</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
       </section>
 
-      <div class="two-col">
-        <!-- 待出库队列 -->
-        <section class="surface-card">
-          <div class="section-header">
-            <div>
-              <h2 class="section-title">待出库队列</h2>
-              <span class="section-note">按状态排序，扫码完成即生成出库码归属</span>
-            </div>
-            <el-button link type="primary" @click="router.push('/sales')">全部单据</el-button>
-          </div>
-
-          <div v-if="!data.pendingOrders.length" class="empty-line">
-            暂无待出库订单。销售在手机端下单后，会实时出现在这里。
-          </div>
-
-          <ul v-else class="queue">
-            <li v-for="order in data.pendingOrders" :key="order.id" class="queue-row">
-              <div class="q-main">
-                <div class="q-top">
-                  <span class="mono q-doc">{{ order.docNo }}</span>
-                  <span class="q-scene">{{ order.orderScene === 'HQ_TO_DEALER' ? '总仓 → 服务商' : '服务商 → 机构' }}</span>
-                </div>
-                <div class="q-buyer">{{ order.buyerOrg?.name || order.clinic?.name || '—' }}</div>
-                <div class="q-meta">
-                  {{ order.items?.reduce((s: number, i: any) => s + i.qty, 0) || 0 }} 盒 ·
-                  {{ order.items?.length || 0 }} 个商品 · {{ order.warehouse?.name || '默认仓' }}
-                </div>
-              </div>
-              <div class="q-side">
-                <span class="q-amount num">¥{{ Number(order.totalAmount).toFixed(2) }}</span>
-                <span
-                  class="q-status"
-                  :class="order.status === 'PENDING_APPROVAL' ? 'warn' : 'ready'"
-                >
-                  {{ order.status === 'PENDING_APPROVAL' ? '红线待特批' : '待扫码' }}
-                </span>
-              </div>
-              <el-button
-                class="q-action"
-                :type="order.status === 'PENDING_APPROVAL' ? 'warning' : 'primary'"
-                plain
-                size="small"
-                @click="openOrder(order)"
-              >
-                {{ order.status === 'PENDING_APPROVAL' ? '去审批' : '去扫码' }}
-              </el-button>
-            </li>
-          </ul>
-        </section>
-
-        <!-- 规则倒计时 -->
-        <section class="surface-card">
-          <div class="section-header">
-            <div>
-              <h2 class="section-title">渠道规则倒计时</h2>
-              <span class="section-note">90 天保护 · 270 天无复购解绑</span>
-            </div>
-            <el-button link type="primary" @click="router.push('/channels')">机构台账</el-button>
-          </div>
-
-          <div v-if="!data.expiringClinics.length" class="empty-line">30 天内没有到期机构。</div>
-
-          <ul v-else class="countdown">
-            <li v-for="c in data.expiringClinics" :key="c.id" class="cd-row">
-              <div class="cd-body">
-                <div class="cd-name">{{ c.name }}</div>
-                <div class="cd-meta">{{ c.ownerOrg?.name || '总部直营' }} · {{ c.warnType }}</div>
-              </div>
-              <div class="cd-days" :class="{ urgent: c.daysLeft <= 15 }">
-                {{ c.daysLeft }}<span>天</span>
-              </div>
-              <div class="cd-bar">
-                <span
-                  :style="{ width: `${Math.max(4, 100 - (c.daysLeft / 90) * 100)}%` }"
-                  :class="{ urgent: c.daysLeft <= 15 }"
-                />
-              </div>
-            </li>
-          </ul>
-        </section>
-      </div>
-
-      <!-- 风控 -->
-      <section class="surface-card">
-        <div class="section-header">
-          <div>
-            <h2 class="section-title">流向与合规预警</h2>
-            <span class="section-note">证据链自动汇总，处置结论永久留痕</span>
-          </div>
-          <el-button link type="primary" @click="router.push('/trace')">进入预警中心</el-button>
+      <!-- 底部轻量化流向条 -->
+      <section class="flow-strip">
+        <div class="flow-head">
+          <span class="flow-title">一物一码流向概览</span>
+          <button type="button" class="flow-link" @click="router.push('/trace')">进入流向中心 →</button>
         </div>
-
-        <div v-if="!data.recentAlerts.length" class="empty-line">渠道流向健康，暂无异常。</div>
-
-        <ul v-else class="alerts">
-          <li v-for="a in data.recentAlerts" :key="a.id" class="alert-row">
-            <span class="alert-level" :class="severityClass(a.severity)">{{ a.severity }}</span>
-            <div class="alert-body">
-              <div class="alert-title">{{ a.title }}</div>
-              <div class="alert-meta">
-                {{ a.org?.name || '总部/未知' }} · {{ a.alertType }}
-                <span v-if="a.traceCodeToken" class="mono alert-code">{{ a.traceCodeToken }}</span>
-              </div>
-            </div>
-            <span class="alert-state" :class="a.status === 'RESOLVED' ? 'done' : 'open'">
-              {{ a.status === 'RESOLVED' ? '已结案' : '待处置' }}
-            </span>
-          </li>
-        </ul>
+        <div class="flow-row">
+          <template v-for="(s, i) in flowStages" :key="s.label">
+            <button type="button" class="flow-node" @click="router.push(s.to)">
+              <span class="flow-label">{{ s.label }}</span>
+              <span class="flow-value num">{{ s.value }}</span>
+            </button>
+            <span v-if="i < flowStages.length - 1" class="flow-line" aria-hidden="true" />
+          </template>
+        </div>
       </section>
     </template>
 
-    <div v-else class="loading-block">
-      <span class="dot" /><span class="dot" /><span class="dot" />
-    </div>
+    <div v-else class="loading-block"><span class="dot" /><span class="dot" /><span class="dot" /></div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { api } from '../utils/api';
-import { useAuthStore } from '../stores/auth';
-import CodeChain from '../components/CodeChain.vue';
 
 const router = useRouter();
-const auth = useAuthStore();
 const data = ref<any>(null);
+const alerts = ref<any[]>([]);
 const inStockQty = ref<number | string>('—');
 const warehouseCount = ref(0);
 
-const todayLabel = new Intl.DateTimeFormat('zh-CN', {
-  month: 'long',
-  day: 'numeric',
-  weekday: 'long',
-}).format(new Date());
+const tab = ref<'orders' | 'alerts' | 'clinics'>('orders');
+const keyword = ref('');
+const orderStatus = ref('');
+const alertSeverity = ref('');
+const clinicWindow = ref(30);
+const selection = ref<any[]>([]);
 
-const greeting = computed(() => {
-  const h = new Date().getHours();
-  if (h < 6) return '夜深了';
-  if (h < 11) return '早上好';
-  if (h < 14) return '中午好';
-  if (h < 18) return '下午好';
-  return '晚上好';
-});
+const unresolvedAlerts = computed(() => alerts.value.filter((a) => a.status !== 'RESOLVED'));
+const expiring = computed(() => (data.value?.expiringClinics || []) as any[]);
 
-const chainStages = computed(() => {
+const tabs = computed(() => [
+  { key: 'orders' as const, label: '待扫码出库', count: data.value?.pendingOrders?.length || 0, tone: 'warn' },
+  { key: 'alerts' as const, label: '合规与窜货预警', count: unresolvedAlerts.value.length, tone: 'danger' },
+  { key: 'clinics' as const, label: '保护期临期', count: expiring.value.length, tone: 'warn' },
+]);
+
+function includesKw(...fields: Array<string | undefined | null>) {
+  const kw = keyword.value.trim().toLowerCase();
+  if (!kw) return true;
+  return fields.some((f) => (f || '').toLowerCase().includes(kw));
+}
+
+const filteredOrders = computed(() =>
+  ((data.value?.pendingOrders || []) as any[]).filter(
+    (o) =>
+      (!orderStatus.value || o.status === orderStatus.value) &&
+      includesKw(o.docNo, o.buyerOrg?.name, o.clinic?.name),
+  ),
+);
+const filteredAlerts = computed(() =>
+  unresolvedAlerts.value.filter(
+    (a) => (!alertSeverity.value || a.severity === alertSeverity.value) && includesKw(a.title, a.org?.name, a.traceCodeToken, a.docNo),
+  ),
+);
+const filteredClinics = computed(() =>
+  expiring.value.filter((c) => c.daysLeft <= clinicWindow.value && includesKw(c.name, c.ownerOrg?.name, c.city)),
+);
+
+const flowStages = computed(() => {
   const k = data.value?.kpis;
   if (!k) return [];
   return [
-    { key: 'factory', label: '出厂赋码', value: k.totalUnitsGenerated, note: '独立身份', state: 'done' as const },
-    { key: 'hq', label: '总仓在库', value: inStockQty.value, note: `${warehouseCount.value} 个仓`, state: 'active' as const },
-    { key: 'dealer', label: '服务商流向', value: k.totalSalesQty, note: '盒已出库', state: 'done' as const },
-    { key: 'clinic', label: '终端机构', value: k.activeClinicsCount, note: '在保护/绑定中', state: 'done' as const },
-    { key: 'consumer', label: '顾客验真', value: k.totalVerifiedConsumers, note: '次扫码', state: 'idle' as const },
+    { label: '出厂赋码', value: k.totalUnitsGenerated, to: '/trace' },
+    { label: '总仓在库', value: inStockQty.value, to: '/inventory' },
+    { label: '已出库', value: k.totalSalesQty, to: '/sales' },
+    { label: '终端机构', value: k.activeClinicsCount, to: '/channels' },
+    { label: '顾客验真', value: k.totalVerifiedConsumers, to: '/trace' },
   ];
 });
 
-async function loadData() {
-  data.value = await api.get('/reports/dashboard');
-  api
-    .get('/stock/balances')
-    .then((rows: any) => {
-      const list = rows as unknown as any[];
-      inStockQty.value = list.reduce((s, r) => s + Number(r.qty || 0), 0).toLocaleString();
-      warehouseCount.value = new Set(list.map((r) => r.warehouseId)).size;
-    })
-    .catch(() => {
-      inStockQty.value = '—';
-    });
-}
+watch(tab, () => {
+  keyword.value = '';
+  selection.value = [];
+});
 
-function severityClass(s: string) {
-  if (s === 'CRITICAL' || s === 'HIGH') return 'high';
-  return 'medium';
+function switchTab(k: 'orders' | 'alerts' | 'clinics') {
+  tab.value = k;
 }
-
+function onSelect(rows: any[]) {
+  selection.value = rows;
+}
+function qtyOf(o: any) {
+  return (o.items || []).reduce((s: number, i: any) => s + Number(i.qty || 0), 0);
+}
+function orderStatusLabel(s: string) {
+  return ({ PENDING_APPROVAL: '红线待特批', PENDING_OUTBOUND: '待扫码', PARTIAL_OUTBOUND: '部分出库' } as Record<string, string>)[s] || s;
+}
+function alertTypeLabel(t: string) {
+  return (
+    ({
+      CROSS_REGION: '跨区窜货',
+      UNAUTHORIZED_SCAN: '非授权扫码',
+      HIGH_FREQ_VERIFY: '高频验真',
+      PRICE_BELOW_REDLINE: '低于供货红线',
+      RETAIL_PRICE_REPORT: '零售破价举报',
+      RECONCILIATION_VARIANCE: '账实差异',
+    } as Record<string, string>)[t] || t
+  );
+}
+function fmt(t: string) {
+  return new Date(t).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }).replace(/\//g, '-').slice(0, 16);
+}
 function openOrder(order: any) {
   router.push({ path: '/sales', query: { outbound: order.id } });
 }
 
-onMounted(loadData);
+function downloadCsv(name: string, header: string[], rows: Array<Array<unknown>>) {
+  const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const body = rows.map((r) => r.map(esc).join(',')).join('\n');
+  const blob = new Blob([`\ufeff${header.join(',')}\n${body}`], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${name}-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function exportCsv() {
+  if (tab.value === 'orders') {
+    const rows = (selection.value.length ? selection.value : filteredOrders.value).map((o) => [
+      o.docNo,
+      o.buyerOrg?.name || o.clinic?.name || '',
+      o.orderScene === 'HQ_TO_DEALER' ? '总仓→服务商' : '服务商→机构',
+      qtyOf(o),
+      Number(o.totalAmount).toFixed(2),
+      orderStatusLabel(o.status),
+    ]);
+    downloadCsv('lumina-pending-orders', ['单号', '客户', '场景', '数量', '金额', '状态'], rows);
+  } else if (tab.value === 'alerts') {
+    const rows = (selection.value.length ? selection.value : filteredAlerts.value).map((a) => [
+      a.severity,
+      alertTypeLabel(a.alertType),
+      a.title,
+      a.org?.name || '',
+      a.traceCodeToken || a.docNo || '',
+      fmt(a.createdAt),
+    ]);
+    downloadCsv('lumina-alerts', ['级别', '类型', '标题', '组织', '防伪码/单号', '时间'], rows);
+  } else {
+    const rows = (selection.value.length ? selection.value : filteredClinics.value).map((c) => [
+      c.name,
+      c.ownerOrg?.name || '总部直营',
+      c.warnType,
+      c.daysLeft,
+    ]);
+    downloadCsv('lumina-expiring-clinics', ['机构', '归属', '到期类型', '剩余天数'], rows);
+  }
+}
+
+function exportLedger() {
+  const rows = ((data.value?.pendingOrders || []) as any[]).map((o) => [
+    o.docNo,
+    o.buyerOrg?.name || o.clinic?.name || '',
+    qtyOf(o),
+    Number(o.totalAmount).toFixed(2),
+    orderStatusLabel(o.status),
+  ]);
+  downloadCsv('lumina-dashboard-ledger', ['单号', '客户', '数量', '金额', '状态'], rows);
+}
+
+function printPicking() {
+  const esc = (s: unknown) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] as string);
+  const blocks = selection.value
+    .map(
+      (o) => `<section><h2>${esc(o.docNo)}</h2><p>${esc(o.buyerOrg?.name || o.clinic?.name || '—')} · ${esc(o.warehouse?.name || '默认仓')}</p>
+      <table><thead><tr><th>商品</th><th>数量</th><th>已出库</th></tr></thead><tbody>${(o.items || [])
+        .map((i: any) => `<tr><td>${esc(i.product?.name)}</td><td>${esc(i.qty)}</td><td>${esc(i.outboundQty ?? 0)}</td></tr>`)
+        .join('')}</tbody></table></section>`,
+    )
+    .join('');
+  const w = window.open('', '_blank', 'width=820,height=900');
+  if (!w) return;
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>拣货单</title><style>
+    body{font-family:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;color:#111827;padding:24px}
+    h1{font-size:18px;margin:0 0 16px}section{border-top:1px solid #d1d5db;padding:12px 0;break-inside:avoid}
+    h2{font-size:14px;margin:0;font-family:ui-monospace,Menlo,monospace}p{margin:4px 0 8px;font-size:12px;color:#4b5563}
+    table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px solid #eceef2;padding:6px 4px;text-align:left}
+    th{color:#6b7280;font-weight:500}</style></head><body><h1>Lumina 出库拣货单 · ${selection.value.length} 单</h1>${blocks}</body></html>`);
+  w.document.close();
+  w.focus();
+  w.print();
+}
+
+async function loadData() {
+  const [dashRes, stockRes, alertRes] = await Promise.allSettled([
+    api.get('/reports/dashboard'),
+    api.get('/stock/balances'),
+    api.get('/trace/alerts'),
+  ]);
+  if (stockRes.status === 'fulfilled') {
+    const list = stockRes.value as unknown as any[];
+    inStockQty.value = list.reduce((s, r) => s + Number(r.qty || 0), 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    warehouseCount.value = new Set(list.map((r) => r.warehouseId)).size;
+  } else {
+    inStockQty.value = '0';
+    warehouseCount.value = 0;
+  }
+  if (dashRes.status === 'fulfilled') {
+    data.value = dashRes.value;
+  }
+  if (alertRes.status === 'fulfilled') {
+    alerts.value = alertRes.value as unknown as any[];
+  } else {
+    alerts.value = (data.value?.recentAlerts || []) as any[];
+  }
+}
+
+onMounted(() => {
+  loadData();
+  window.addEventListener('lumina:scan-activity', loadData);
+});
+onUnmounted(() => {
+  window.removeEventListener('lumina:scan-activity', loadData);
+});
 </script>
 
 <style scoped>
-/* 码链卡 */
-.chain-card {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  padding: 16px 22px 20px;
-  margin-bottom: 16px;
+.workbench {
+  border: 1px solid var(--border-hairline);
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 40px;
 }
-.chain-head {
+.wb-tabs {
+  display: flex;
+  gap: 28px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--border-hairline);
+}
+.wb-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 46px;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink-muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.wb-tab:hover {
+  color: var(--ink-primary);
+}
+.wb-tab.on {
+  color: var(--ink-primary);
+  font-weight: 600;
+  border-bottom-color: #111827;
+}
+.wb-count {
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  font-size: 11.5px;
+  line-height: 18px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  background: var(--bg-subtle);
+  color: var(--ink-secondary);
+}
+.wb-tab.on .wb-count.warn {
+  background: var(--status-warn-bg);
+  color: var(--status-warn);
+}
+.wb-tab.on .wb-count.danger {
+  background: var(--status-danger-bg);
+  color: var(--status-danger);
+}
+.workbench :deep(.el-table th.el-table__cell) {
+  background: #ffffff;
+}
+.doc {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.cell-strong {
+  font-weight: 500;
+  color: var(--ink-primary);
+}
+.cell-sub {
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+.days {
+  font-weight: 600;
+  color: var(--status-warn);
+}
+.days.urgent {
+  color: var(--status-danger);
+}
+
+.flow-strip {
+  padding-top: 4px;
+}
+.flow-head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 12px;
-  border-bottom: 1px solid var(--line);
-  padding-bottom: 12px;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
-
-.two-col {
-  display: grid;
-  grid-template-columns: minmax(0, 1.55fr) minmax(300px, 1fr);
-  gap: 16px;
-  margin-bottom: 16px;
-  align-items: start;
-}
-
-/* 待出库队列 */
-.queue {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.queue-row {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 12px 0;
-  border-bottom: 1px solid var(--line);
-}
-.queue-row:last-child {
-  border-bottom: 0;
-  padding-bottom: 2px;
-}
-.q-main {
-  flex: 1;
-  min-width: 0;
-}
-.q-top {
-  display: flex;
-  align-items: baseline;
-  gap: 9px;
-}
-.q-doc {
-  font-size: 12.5px;
-  color: var(--brand-ink);
-  font-weight: 600;
-}
-.q-scene {
-  font-size: 10.5px;
-  color: var(--ink-3);
-  border-left: 1px solid var(--line-strong);
-  padding-left: 9px;
-}
-.q-buyer {
-  font-size: 13.5px;
-  font-weight: 600;
-  color: var(--ink);
-  margin-top: 3px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.q-meta {
-  font-size: 11.5px;
-  color: var(--ink-3);
-  margin-top: 2px;
-}
-.q-side {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 3px;
-  flex-shrink: 0;
-}
-.q-amount {
+.flow-title {
   font-size: 14px;
-  color: var(--ink);
-}
-.q-status {
-  font-size: 10.5px;
-  padding: 1px 6px;
-  border-radius: 3px;
-  border: 1px solid transparent;
-}
-.q-status.ready {
-  color: var(--brand-ink);
-  background: var(--brand-tint);
-  border-color: var(--brand-line);
-}
-.q-status.warn {
-  color: var(--seal);
-  background: var(--seal-tint);
-  border-color: var(--seal-line);
-}
-.q-action {
-  flex-shrink: 0;
-  min-width: 76px;
-}
-
-/* 倒计时 */
-.countdown {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.cd-row {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 11px 0 13px;
-  border-bottom: 1px solid var(--line);
-}
-.cd-row:last-child {
-  border-bottom: 0;
-}
-.cd-body {
-  flex: 1;
-  min-width: 0;
-}
-.cd-name {
-  font-size: 13px;
-  font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.cd-meta {
-  font-size: 11px;
-  color: var(--ink-3);
-  margin-top: 2px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.cd-days {
-  font-family: var(--font-num);
-  font-size: 20px;
-  color: var(--ink);
-  line-height: 1;
-  flex-shrink: 0;
-}
-.cd-days span {
-  font-family: var(--font-ui);
-  font-size: 10.5px;
-  color: var(--ink-3);
-  margin-left: 2px;
-}
-.cd-days.urgent {
-  color: var(--seal);
-}
-.cd-bar {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 5px;
-  height: 2px;
-  background: var(--surface-3);
-  border-radius: 2px;
-  overflow: hidden;
-}
-.cd-bar span {
-  display: block;
-  height: 100%;
-  background: var(--brand-line);
-  transition: width 0.4s ease;
-}
-.cd-bar span.urgent {
-  background: var(--seal-line);
-}
-
-/* 预警 */
-.alerts {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.alert-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 11px 0;
-  border-bottom: 1px solid var(--line);
-}
-.alert-row:last-child {
-  border-bottom: 0;
-  padding-bottom: 0;
-}
-.alert-level {
-  font-size: 10px;
   font-weight: 600;
-  letter-spacing: 0.04em;
-  padding: 2px 6px;
-  border-radius: 3px;
-  flex-shrink: 0;
-  width: 58px;
-  text-align: center;
+  color: var(--ink-primary);
 }
-.alert-level.high {
-  background: var(--seal-tint);
-  color: var(--seal);
-  border: 1px solid var(--seal-line);
+.flow-link {
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: var(--ink-secondary);
+  cursor: pointer;
 }
-.alert-level.medium {
-  background: var(--ochre-tint);
-  color: var(--ochre);
-  border: 1px solid #e6d5ae;
+.flow-link:hover {
+  color: var(--ink-primary);
 }
-.alert-body {
+.flow-row {
+  display: flex;
+  align-items: center;
+  padding: 16px 0;
+  border-top: 1px solid var(--border-hairline);
+  border-bottom: 1px solid var(--border-hairline);
+}
+.flow-node {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.flow-node:hover {
+  background: var(--bg-hover);
+}
+.flow-label {
+  font-size: 12.5px;
+  color: var(--ink-muted);
+}
+.flow-value {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--ink-primary);
+}
+.flow-line {
   flex: 1;
-  min-width: 0;
-}
-.alert-title {
-  font-size: 13px;
-  color: var(--ink);
-}
-.alert-meta {
-  font-size: 11px;
-  color: var(--ink-3);
-  margin-top: 2px;
-}
-.alert-code {
-  margin-left: 6px;
-  color: var(--brand-ink);
-}
-.alert-state {
-  font-size: 11px;
-  flex-shrink: 0;
-}
-.alert-state.done {
-  color: var(--jade);
-}
-.alert-state.open {
-  color: var(--seal);
+  height: 1px;
+  min-width: 16px;
+  margin: 0 12px;
+  background: var(--border-hairline);
 }
 
 .loading-block {
@@ -492,7 +583,7 @@ onMounted(loadData);
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--brand-line);
+  background: var(--border-strong);
   animation: blink 1.2s ease-in-out infinite;
 }
 .loading-block .dot:nth-child(2) {
@@ -507,20 +598,17 @@ onMounted(loadData);
   }
 }
 
-@media (max-width: 1100px) {
-  .two-col {
-    grid-template-columns: 1fr;
-  }
-}
-@media (max-width: 720px) {
-  .queue-row {
+@media (max-width: 900px) {
+  .flow-row {
     flex-wrap: wrap;
+    gap: 8px 0;
   }
-  .q-side {
-    align-items: flex-start;
+  .flow-line {
+    display: none;
   }
-  .q-action {
-    width: 100%;
+  .wb-tabs {
+    gap: 16px;
+    overflow-x: auto;
   }
 }
 </style>

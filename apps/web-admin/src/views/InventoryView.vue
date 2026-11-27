@@ -3,9 +3,7 @@
     <div class="page-header">
       <div>
         <h1 class="page-title">库存与月度核验</h1>
-        <p class="page-subtitle">
-          每一盒在库库存都能穿透到具体防伪码，不会出现负库存。每月自动比对服务商理论库存与实盘，差异无法解释的可直接停供。
-        </p>
+        <p class="page-subtitle">实时在库存穿透查码与月度盘点核验</p>
       </div>
       <div class="page-actions">
         <el-button v-if="auth.isHQ" type="primary" @click="generateCurrentMonth">生成本月核验单</el-button>
@@ -39,50 +37,60 @@
       <el-tab-pane label="实时库存" name="balances">
         <div class="surface-card">
           <div class="toolbar-row">
-            <el-select v-model="filterWarehouse" clearable placeholder="全部仓库" style="width: 220px" @change="loadBalances">
+            <el-select v-model="filterWarehouse" clearable placeholder="全部仓库" class="filter-select" @change="loadBalances(1)">
               <el-option v-for="w in warehouses" :key="w.id" :label="w.name" :value="w.id" />
             </el-select>
             <el-input
               v-model="keyword"
               placeholder="搜索商品名称或货号"
               clearable
-              style="width: 240px"
-              @keyup.enter="loadBalances"
+              class="filter-input"
+              @keyup.enter="loadBalances(1)"
             />
-            <el-button @click="loadBalances">查询</el-button>
+            <el-button @click="loadBalances(1)">查询</el-button>
             <span class="toolbar-note">点“在库码”可看这一批货具体是哪些码</span>
           </div>
 
           <el-table :data="balances" size="small" empty-text="没有符合条件的库存">
-            <el-table-column label="仓库" width="200">
+            <el-table-column label="仓库" min-width="156" show-overflow-tooltip>
               <template #default="{ row }">
                 <div class="cell-strong">{{ row.warehouse.name }}</div>
                 <div class="cell-sub">{{ row.warehouse.org.name }}</div>
               </template>
             </el-table-column>
-            <el-table-column label="商品" min-width="200">
+            <el-table-column label="商品" min-width="170" show-overflow-tooltip>
               <template #default="{ row }">
                 <div class="cell-strong">{{ row.product.name }}</div>
                 <div class="cell-sub mono">{{ row.product.skuCode }} · {{ row.product.spec }}</div>
               </template>
             </el-table-column>
-            <el-table-column label="品牌" width="140">
+            <el-table-column label="品牌" width="108" show-overflow-tooltip>
               <template #default="{ row }">{{ row.product.brand?.name }}</template>
             </el-table-column>
-            <el-table-column label="在库" width="110" align="right">
+            <el-table-column label="在库" width="92" align="right">
               <template #default="{ row }">
                 <span class="stock-qty" :class="{ low: row.qty <= row.warnMinQty }">{{ row.qty }} {{ row.product.unitName }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="预警线" width="90" align="right">
+            <el-table-column label="预警线" width="76" align="right">
               <template #default="{ row }"><span class="mono muted">{{ row.warnMinQty }}</span></template>
             </el-table-column>
-            <el-table-column label="" width="110" align="right">
+            <el-table-column label="" width="82" align="right">
               <template #default="{ row }">
                 <el-button size="small" link type="primary" @click="openCodeDrilldown(row)">在库码</el-button>
               </template>
             </el-table-column>
           </el-table>
+          <div class="table-pager">
+            <el-pagination
+              background
+              layout="total, prev, pager, next"
+              :total="balTotal"
+              :page-size="balPageSize"
+              :current-page="balPage"
+              @current-change="(p: number) => loadBalances(p)"
+            />
+          </div>
         </div>
       </el-tab-pane>
 
@@ -92,7 +100,7 @@
             <el-table-column label="账期" width="90">
               <template #default="{ row }"><span class="mono">{{ row.periodMonth }}</span></template>
             </el-table-column>
-            <el-table-column label="服务商" min-width="190">
+            <el-table-column label="服务商" min-width="148" show-overflow-tooltip>
               <template #default="{ row }">
                 <div class="cell-strong">{{ row.org.name }}</div>
                 <div v-if="row.org.supplyFrozen" class="frozen-tip">已停供</div>
@@ -116,8 +124,8 @@
                 <span class="rec-pill" :class="recClass(row.status)">{{ recLabel(row.status) }}</span>
               </template>
             </el-table-column>
-            <el-table-column prop="dealerNote" label="差异说明" show-overflow-tooltip min-width="180" />
-            <el-table-column label="操作" width="150" fixed="right">
+            <el-table-column prop="dealerNote" label="差异说明" show-overflow-tooltip min-width="136" />
+            <el-table-column label="操作" width="132" align="right" :fixed="width <= 1180 ? false : 'right'">
               <template #default="{ row }">
                 <el-button
                   v-if="row.status === 'PENDING_SUBMIT'"
@@ -140,6 +148,16 @@
               </template>
             </el-table-column>
           </el-table>
+          <div class="table-pager">
+            <el-pagination
+              background
+              layout="total, prev, pager, next"
+              :total="recTotal"
+              :page-size="recPageSize"
+              :current-page="recPage"
+              @current-change="(p: number) => loadReconciliations(p)"
+            />
+          </div>
         </div>
       </el-tab-pane>
 
@@ -148,7 +166,7 @@
           <el-table :data="ledgers" size="small" empty-text="暂无流水">
             <el-table-column label="时间" width="160">
               <template #default="{ row }">
-                <span class="mono cell-sub">{{ row.createdAt?.replace('T', ' ').slice(0, 19) }}</span>
+                <span class="mono cell-sub">{{ formatDateTime(row.createdAt, true) }}</span>
               </template>
             </el-table-column>
             <el-table-column label="仓库" width="140">
@@ -175,35 +193,61 @@
               <template #default="{ row }"><span class="mono muted">{{ row.afterQty }}</span></template>
             </el-table-column>
           </el-table>
+          <div class="table-pager">
+            <el-pagination
+              background
+              layout="total, prev, pager, next"
+              :total="ledgerTotal"
+              :page-size="ledgerPageSize"
+              :current-page="ledgerPage"
+              @current-change="(p: number) => loadLedgers(p)"
+            />
+          </div>
         </div>
       </el-tab-pane>
     </el-tabs>
 
     <!-- 在库码穿透 -->
-    <el-dialog v-model="drillDialog" :title="`在库防伪码 · ${drillTitle}`" width="720px">
-      <p class="dialog-note">这些码当前实际存放在该仓库。售出后会自动转为“已出库”并挂到客户名下。</p>
-      <el-table :data="drillCodes" size="small" max-height="420" empty-text="该仓该商品暂无在库码">
-        <el-table-column label="级别" width="80">
+    <el-dialog v-model="drillDialog" :title="`在库防伪码 · ${drillTitle}`" width="min(760px, 94vw)" align-center>
+      <p class="dialog-note">这些码当前实际存放在该仓库，点击防伪码即可复制。售出后会自动转为“已出库”并挂到客户名下。</p>
+      <el-table :data="drillCodes" size="small" style="width: 100%" max-height="420" empty-text="该仓该商品暂无在库码">
+        <el-table-column label="级别" width="76">
           <template #default="{ row }">
             <span class="level-tag" :class="row.codeLevel === 'CARTON' ? 'carton' : 'unit'">
               {{ row.codeLevel === 'CARTON' ? '外箱' : '单盒' }}
             </span>
           </template>
         </el-table-column>
-        <el-table-column prop="codeToken" label="防伪码" width="190">
-          <template #default="{ row }"><span class="code-chip">{{ row.codeToken }}</span></template>
+        <el-table-column prop="codeToken" label="防伪码" min-width="210">
+          <template #default="{ row }">
+            <span class="code-chip clickable" title="点击复制" @click="copyCode(row.codeToken)">
+              {{ formatCodeGroups(row.codeToken) }}
+            </span>
+          </template>
         </el-table-column>
-        <el-table-column label="所属外箱" width="170">
-          <template #default="{ row }"><span class="mono cell-sub">{{ row.parent?.codeToken || '—' }}</span></template>
+        <el-table-column label="所属外箱" min-width="195">
+          <template #default="{ row }">
+            <span class="mono cell-sub">{{ row.parent?.codeToken ? formatCodeGroups(row.parent.codeToken) : '—' }}</span>
+          </template>
         </el-table-column>
-        <el-table-column label="批次">
+        <el-table-column label="批次" min-width="135">
           <template #default="{ row }"><span class="mono cell-sub">{{ row.batch?.batchNo }}</span></template>
         </el-table-column>
       </el-table>
+      <div class="table-pager">
+        <el-pagination
+          background
+          layout="total, prev, pager, next"
+          :total="drillTotal"
+          :page-size="drillPageSize"
+          :current-page="drillPage"
+          @current-change="(p: number) => loadDrillCodes(p)"
+        />
+      </div>
     </el-dialog>
 
     <!-- 实盘填报 -->
-    <el-dialog v-model="submitRecDialog" title="提交月度实盘" width="660px">
+    <el-dialog v-model="submitRecDialog" title="提交月度实盘" width="min(660px, 94vw)" align-center>
       <p class="dialog-note">按实际盘点数填写。差异处请写明原因，总部会逐条核查。</p>
       <el-table :data="recSubmitItems" size="small" border>
         <el-table-column prop="productName" label="商品" min-width="160" />
@@ -227,7 +271,7 @@
     </el-dialog>
 
     <!-- 核查处置 -->
-    <el-dialog v-model="auditRecDialog" title="账实差异核查处置" width="540px">
+    <el-dialog v-model="auditRecDialog" title="账实差异核查处置" width="min(540px, 94vw)" align-center>
       <div class="audit-head">
         <div class="audit-org">{{ activeRec?.org?.name }}</div>
         <div class="audit-diff">
@@ -260,8 +304,11 @@ import { computed, onMounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { api } from '../utils/api';
 import { useAuthStore } from '../stores/auth';
+import { formatCodeGroups, formatDateTime, useViewport } from '../utils/format';
 
 const auth = useAuthStore();
+const { width } = useViewport();
+const isCompact = computed(() => width.value <= 960);
 const activeTab = ref('balances');
 const warehouses = ref<any[]>([]);
 const filterWarehouse = ref('');
@@ -288,32 +335,80 @@ const lowStockCount = computed(() => balances.value.filter((r) => Number(r.qty) 
 const pendingRecCount = computed(() => reconciliations.value.filter((r) => r.status === 'PENDING_SUBMIT').length);
 const varianceCount = computed(() => reconciliations.value.filter((r) => r.status === 'VARIANCE_FLAGGED').length);
 
-async function loadBalances() {
-  balances.value = (await api.get('/stock/balances', {
+const balPage = ref(1);
+const balPageSize = 20;
+const balTotal = ref(0);
+const recPage = ref(1);
+const recPageSize = 20;
+const recTotal = ref(0);
+const ledgerPage = ref(1);
+const ledgerPageSize = 20;
+const ledgerTotal = ref(0);
+const drillPage = ref(1);
+const drillPageSize = 50;
+const drillTotal = ref(0);
+const drillTarget = ref<{ warehouseId: string; productId: string } | null>(null);
+
+async function loadBalances(p = 1) {
+  balPage.value = p;
+  const res = (await api.get('/stock/balances', {
     params: {
       warehouseId: filterWarehouse.value || undefined,
       keyword: keyword.value || undefined,
+      page: p,
+      pageSize: balPageSize,
     },
-  })) as unknown as any[];
+  })) as any;
+  balances.value = Array.isArray(res) ? res : res.items || [];
+  balTotal.value = Array.isArray(res) ? res.length : Number(res.total || 0);
+}
+
+async function loadReconciliations(p = recPage.value) {
+  recPage.value = p;
+  const res = (await api.get('/reconciliations', { params: { page: p, pageSize: recPageSize } })) as any;
+  reconciliations.value = Array.isArray(res) ? res : res.items || [];
+  recTotal.value = Array.isArray(res) ? res.length : Number(res.total || 0);
+}
+
+async function loadLedgers(p = ledgerPage.value) {
+  ledgerPage.value = p;
+  const res = (await api.get('/stock/ledgers', { params: { page: p, pageSize: ledgerPageSize } })) as any;
+  ledgers.value = Array.isArray(res) ? res : res.items || [];
+  ledgerTotal.value = Array.isArray(res) ? res.length : Number(res.total || 0);
 }
 
 async function loadAll() {
-  const [whs, lds, recs] = await Promise.all([
+  const [whs] = await Promise.all([
     api.get('/warehouses'),
-    api.get('/stock/ledgers'),
-    api.get('/reconciliations'),
+    loadLedgers(1),
+    loadReconciliations(1),
+    loadBalances(1),
   ]);
   warehouses.value = whs as unknown as any[];
-  ledgers.value = lds as unknown as any[];
-  reconciliations.value = recs as unknown as any[];
-  await loadBalances();
 }
 
 onMounted(loadAll);
 
+function copyCode(token: string) {
+  navigator.clipboard?.writeText(token);
+  ElMessage.success(`已复制：${token}`);
+}
+
+async function loadDrillCodes(p = 1) {
+  if (!drillTarget.value) return;
+  drillPage.value = p;
+  const { warehouseId, productId } = drillTarget.value;
+  const res = (await api.get(`/stock/balances/${warehouseId}/${productId}/codes`, {
+    params: { page: p, pageSize: drillPageSize },
+  })) as any;
+  drillCodes.value = Array.isArray(res) ? res : res.items || [];
+  drillTotal.value = Array.isArray(res) ? res.length : Number(res.total || 0);
+}
+
 async function openCodeDrilldown(row: any) {
   drillTitle.value = `${row.warehouse.name} · ${row.product.name}`;
-  drillCodes.value = (await api.get(`/stock/balances/${row.warehouseId}/${row.productId}/codes`)) as unknown as any[];
+  drillTarget.value = { warehouseId: row.warehouseId, productId: row.productId };
+  await loadDrillCodes(1);
   drillDialog.value = true;
 }
 
@@ -393,10 +488,26 @@ function recClass(s: string) {
   margin-bottom: 12px;
   flex-wrap: wrap;
 }
+.filter-select {
+  width: 210px;
+}
+.filter-input {
+  width: 230px;
+}
 .toolbar-note {
   font-size: 11.5px;
   color: var(--ink-3);
   margin-left: auto;
+}
+@media (max-width: 720px) {
+  .filter-select,
+  .filter-input {
+    width: 100%;
+  }
+  .toolbar-note {
+    margin-left: 0;
+    width: 100%;
+  }
 }
 .cell-strong {
   font-size: 13px;

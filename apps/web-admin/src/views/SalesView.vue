@@ -3,9 +3,7 @@
     <div class="page-header">
       <div>
         <h1 class="page-title">出库与打单</h1>
-        <p class="page-subtitle">
-          出库时扫的每一个码，都会记到客户名下：服务商拿到哪一箱、机构拿到哪一盒，都能查。老式针式打印机走浏览器打印或本地打印桥，不用换设备。
-        </p>
+        <p class="page-subtitle">扫码出库绑定代理商 / 机构与联单打印</p>
       </div>
       <div class="page-actions">
         <el-button @click="returnDialog = true">退货回仓</el-button>
@@ -20,82 +18,163 @@
           :key="f.value"
           type="button"
           :class="{ on: statusFilter === f.value }"
-          @click="statusFilter = f.value"
+          @click="onStatusFilter(f.value)"
         >
           {{ f.label }}
           <span class="seg-count">{{ countByStatus(f.value) }}</span>
         </button>
       </div>
-      <span class="filter-hint">红色为破 3.5 折红线，需总部特批后才能出库</span>
+      <span class="filter-hint">红色为低于供货红线，需总部特批后出库</span>
     </div>
 
-    <div class="surface-card flush">
-      <el-table :data="filteredOrders" size="small" empty-text="当前筛选下没有单据">
-        <el-table-column label="单号 / 场景" width="190">
+    <div v-if="!isMobile" class="surface-card flush">
+      <div class="bulk-bar">
+        <div class="bulk-left">
+          <span class="bulk-count">已选 <strong>{{ orderSelection.length }}</strong> 项 · 共 {{ salesTotal }} 单</span>
+        </div>
+        <div class="bulk-right">
+          <el-button size="small" :disabled="!orderSelection.length" @click="startBatchPrint">批量打印出库联单</el-button>
+          <el-button size="small" @click="exportOrdersCsv">导出 CSV</el-button>
+        </div>
+      </div>
+      <el-table
+        :data="filteredOrders"
+        size="small"
+        style="width: 100%"
+        row-key="id"
+        empty-text="当前筛选下没有单据"
+        @selection-change="(rows: any[]) => (orderSelection = rows)"
+      >
+        <el-table-column type="selection" width="40" />
+        <el-table-column label="单号 / 场景" width="144">
           <template #default="{ row }">
             <div class="mono cell-doc">{{ row.docNo }}</div>
             <div class="cell-sub">{{ row.orderScene === 'HQ_TO_DEALER' ? '总仓 → 服务商' : '服务商 → 机构' }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="客户 / 收货方" min-width="190">
+        <el-table-column label="客户 / 收货方" min-width="140" show-overflow-tooltip>
           <template #default="{ row }">
-            <div class="cell-strong">{{ row.buyerOrg?.name || row.clinic?.name || '—' }}</div>
-            <div class="cell-sub">出库仓：{{ row.warehouse?.name }}</div>
+            <div class="cell-strong ellipsis-line" :title="row.buyerOrg?.name || row.clinic?.name">{{ row.buyerOrg?.name || row.clinic?.name || '—' }}</div>
+            <div class="cell-sub ellipsis-line" :title="row.warehouse?.name">仓：{{ row.warehouse?.name }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="商品与出库进度" min-width="230">
+        <el-table-column label="商品与出库进度" min-width="152">
           <template #default="{ row }">
             <div v-for="it in row.items" :key="it.id" class="item-line">
-              <span class="item-name">{{ it.product.name }}</span>
+              <span class="item-name" :title="it.product.name">{{ it.product.name }}</span>
               <span v-if="it.isGift" class="gift-tag">赠</span>
               <span class="mono item-qty">{{ it.outboundQty }}/{{ it.qty }}</span>
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="折率" width="80" align="right">
+        <el-table-column label="折率" width="66" align="right">
           <template #default="{ row }">
             <span
               class="fold"
               :class="{ danger: Number(row.compositeDiscountRatio) < 0.35 }"
             >
-              {{ (Number(row.compositeDiscountRatio) * 10).toFixed(2) }} 折
+              {{ (Number(row.compositeDiscountRatio) * 10).toFixed(2) }}折
             </span>
           </template>
         </el-table-column>
-        <el-table-column label="应收" width="110" align="right">
+        <el-table-column label="应收" width="88" align="right">
           <template #default="{ row }"><span class="mono">¥{{ Number(row.totalAmount).toFixed(2) }}</span></template>
         </el-table-column>
-        <el-table-column label="状态" width="105">
+        <el-table-column label="状态" width="76">
           <template #default="{ row }">
             <span class="status-pill" :class="statusClass(row.status)">{{ statusLabel(row.status) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="250" fixed="right">
+        <el-table-column label="操作" width="184" align="right" :fixed="width <= 1200 ? false : 'right'">
           <template #default="{ row }">
-            <el-button
-              v-if="row.status === 'PENDING_OUTBOUND' || row.status === 'PARTIAL_OUTBOUND'"
-              size="small"
-              type="primary"
-              @click="openOutbound(row)"
-            >
-              扫码出库
-            </el-button>
-            <el-button
-              v-if="auth.isHQ && row.status === 'PENDING_APPROVAL'"
-              size="small"
-              type="warning"
-              plain
-              @click="approveOrder(row)"
-            >
-              特批放行
-            </el-button>
-            <el-button size="small" link type="primary" @click="openOrderCodes(row)">码归属</el-button>
-            <el-button size="small" link @click="openPrint(row.id)">
-              打单{{ row.printCount ? ` ${row.printCount}` : '' }}
-            </el-button>
+            <div class="table-actions">
+              <el-button
+                v-if="row.status === 'PENDING_OUTBOUND' || row.status === 'PARTIAL_OUTBOUND'"
+                size="small"
+                type="primary"
+                @click="openOutbound(row)"
+              >
+                扫码出库
+              </el-button>
+              <el-button
+                v-if="auth.isHQ && row.status === 'PENDING_APPROVAL'"
+                size="small"
+                type="warning"
+                plain
+                @click="approveOrder(row)"
+              >
+                特批放行
+              </el-button>
+              <el-button size="small" link type="primary" @click="openOrderCodes(row)">码归属</el-button>
+              <el-button size="small" link @click="openPrint(row.id)">
+                打单{{ row.printCount ? ` ${row.printCount}` : '' }}
+              </el-button>
+            </div>
           </template>
         </el-table-column>
       </el-table>
+      <div class="table-pager">
+        <el-pagination
+          background
+          layout="total, prev, pager, next"
+          :total="salesTotal"
+          :page-size="salesPageSize"
+          :current-page="salesPage"
+          @current-change="(p: number) => loadSalesOrders(p)"
+        />
+      </div>
+    </div>
+
+    <!-- 移动端订单卡片 -->
+    <div v-else class="mobile-orders">
+      <div v-if="!filteredOrders.length" class="surface-card empty-line">当前筛选下没有单据</div>
+      <article v-for="row in filteredOrders" :key="row.id" class="surface-card mo-card">
+        <div class="mo-top">
+          <div>
+            <div class="mono cell-doc">{{ row.docNo }}</div>
+            <div class="cell-sub">{{ row.orderScene === 'HQ_TO_DEALER' ? '总仓 → 服务商' : '服务商 → 机构' }}</div>
+          </div>
+          <span class="status-pill" :class="statusClass(row.status)">{{ statusLabel(row.status) }}</span>
+        </div>
+        <div class="mo-buyer">{{ row.buyerOrg?.name || row.clinic?.name || '—' }}</div>
+        <div class="cell-sub">出库仓：{{ row.warehouse?.name }}</div>
+        <div class="mo-items">
+          <div v-for="it in row.items" :key="it.id" class="item-line">
+            <span class="item-name">{{ it.product.name }}</span>
+            <span v-if="it.isGift" class="gift-tag">赠</span>
+            <span class="mono item-qty">{{ it.outboundQty }}/{{ it.qty }}</span>
+          </div>
+        </div>
+        <div class="mo-summary">
+          <span class="fold" :class="{ danger: Number(row.compositeDiscountRatio) < 0.35 }">
+            综合 {{ (Number(row.compositeDiscountRatio) * 10).toFixed(2) }} 折
+          </span>
+          <span class="mono mo-amount">¥{{ Number(row.totalAmount).toFixed(2) }}</span>
+        </div>
+        <div class="mo-actions">
+          <el-button
+            v-if="row.status === 'PENDING_OUTBOUND' || row.status === 'PARTIAL_OUTBOUND'"
+            size="small"
+            type="primary"
+            @click="openOutbound(row)"
+          >
+            扫码出库
+          </el-button>
+          <el-button
+            v-if="auth.isHQ && row.status === 'PENDING_APPROVAL'"
+            size="small"
+            type="warning"
+            plain
+            @click="approveOrder(row)"
+          >
+            特批放行
+          </el-button>
+          <el-button size="small" plain type="primary" @click="openOrderCodes(row)">码归属</el-button>
+          <el-button size="small" @click="openPrint(row.id)">
+            打单{{ row.printCount ? ` ${row.printCount}` : '' }}
+          </el-button>
+        </div>
+      </article>
     </div>
 
     <!-- 退货记录 -->
@@ -131,6 +210,16 @@
           <template #default="{ row }"><span class="mono">¥{{ Number(row.totalRefundAmount).toFixed(2) }}</span></template>
         </el-table-column>
       </el-table>
+      <div class="table-pager">
+        <el-pagination
+          background
+          layout="total, prev, pager, next"
+          :total="returnTotal"
+          :page-size="returnPageSize"
+          :current-page="returnPage"
+          @current-change="(p: number) => loadReturnOrders(p)"
+        />
+      </div>
     </section>
 
     <!-- ================= 扫码出库作业层 ================= -->
@@ -156,7 +245,9 @@
             <div class="stage">
               <div class="stage-head">
                 <span class="stage-title">扫码口</span>
-                <span class="stage-sub">扫码枪免点击盲扫</span>
+                <div class="stage-head-right">
+                  <span class="stage-sub">USB 扫码枪免点击盲扫 · 或手工输入防伪码回车录入</span>
+                </div>
               </div>
               <input
                 ref="outScanRef"
@@ -283,7 +374,7 @@
     </Teleport>
 
     <!-- 出库码归属抽屉 -->
-    <el-drawer v-model="codesDrawer" :size="560" :with-header="false">
+    <el-drawer v-model="codesDrawer" :size="isMobile ? '100%' : '580px'" :with-header="false">
       <div class="drawer-inner">
         <div class="drawer-head">
           <div>
@@ -325,24 +416,28 @@
               <el-button size="small" @click="copyAllCodes">复制全部码</el-button>
               <el-button size="small" @click="exportCodesCsv">导出 CSV</el-button>
             </div>
-            <el-table :data="codesData.codes" size="small" max-height="520">
-              <el-table-column label="防伪码" width="178">
-                <template #default="{ row }"><span class="code-chip">{{ row.token }}</span></template>
+            <el-table :data="codesData.codes" size="small" style="width: 100%" max-height="520">
+              <el-table-column label="防伪码" min-width="195">
+                <template #default="{ row }">
+                  <span class="code-chip clickable" title="点击复制防伪码" @click="copySingleCode(row.token)">
+                    {{ formatCodeGroups(row.token) }}
+                  </span>
+                </template>
               </el-table-column>
-              <el-table-column label="商品" min-width="150">
+              <el-table-column label="商品" min-width="135">
                 <template #default="{ row }">
                   <div>{{ row.productName }}</div>
                   <div class="cell-sub mono">{{ row.skuCode }}</div>
                 </template>
               </el-table-column>
-              <el-table-column label="级别" width="70">
+              <el-table-column label="级别" width="66">
                 <template #default="{ row }">
                   <span class="level-tag" :class="row.codeLevel === 'CARTON' ? 'carton' : 'unit'">
                     {{ row.codeLevel === 'CARTON' ? '外箱' : '单盒' }}
                   </span>
                 </template>
               </el-table-column>
-              <el-table-column label="顾客验真" width="86" align="right">
+              <el-table-column label="验真" width="70" align="right">
                 <template #default="{ row }">
                   <span class="mono" :class="{ muted: !row.verifyCount }">{{ row.verifyCount || 0 }} 次</span>
                 </template>
@@ -354,8 +449,8 @@
     </el-drawer>
 
     <!-- 新建供货单 -->
-    <el-dialog v-model="createDialog" title="新建供货单" width="900px" top="4vh">
-      <el-form :model="orderForm" label-width="86px">
+    <el-dialog v-model="createDialog" title="新建供货单" width="min(900px, 94vw)" top="3vh">
+      <el-form :model="orderForm" :label-width="isMobile ? 'auto' : '86px'" :label-position="isMobile ? 'top' : 'right'">
         <div class="form-grid-3">
           <el-form-item label="业务场景" required>
             <el-select v-model="orderForm.orderScene" style="width: 100%">
@@ -458,8 +553,8 @@
     </el-dialog>
 
     <!-- 退货 -->
-    <el-dialog v-model="returnDialog" title="退货回仓" width="560px">
-      <el-form :model="returnForm" label-width="96px">
+    <el-dialog v-model="returnDialog" title="退货回仓" width="min(560px, 94vw)" align-center>
+      <el-form :model="returnForm" :label-width="isMobile ? 'auto' : '96px'" :label-position="isMobile ? 'top' : 'right'">
         <el-form-item label="退回仓库" required>
           <el-select v-model="returnForm.warehouseId" style="width: 100%">
             <el-option v-for="w in warehouses" :key="w.id" :label="w.name" :value="w.id" />
@@ -493,12 +588,16 @@ import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { api } from '../utils/api';
 import { useAuthStore } from '../stores/auth';
+import { formatCodeGroups, useViewport } from '../utils/format';
 import PrintOrderModal from '../components/PrintOrderModal.vue';
 import { playScanBeep, speakWarehouseVoice, useBarcodeScanner } from '../composables/useBarcodeScanner';
 
 const auth = useAuthStore();
 const route = useRoute();
 const router = useRouter();
+const { width } = useViewport();
+const isMobile = computed(() => width.value <= 720);
+const isCompact = computed(() => width.value <= 960);
 
 const salesOrders = ref<any[]>([]);
 const returnOrders = ref<any[]>([]);
@@ -544,7 +643,52 @@ const returnDialog = ref(false);
 const returnForm = ref({ warehouseId: '', originalSalesNo: '', codesText: '' });
 const printVisible = ref(false);
 const printOrderId = ref<string | null>(null);
+const orderSelection = ref<any[]>([]);
+const printQueue = ref<string[]>([]);
 
+function startBatchPrint() {
+  const ids = orderSelection.value.map((o) => o.id);
+  if (!ids.length) return;
+  printQueue.value = ids.slice(1);
+  printOrderId.value = ids[0];
+  printVisible.value = true;
+  if (ids.length > 1) ElMessage.info(`共 ${ids.length} 张联单，关闭当前联单后自动打开下一张`);
+}
+
+watch(printVisible, (open) => {
+  if (!open && printQueue.value.length) {
+    const next = printQueue.value.shift() as string;
+    setTimeout(() => {
+      printOrderId.value = next;
+      printVisible.value = true;
+    }, 180);
+  }
+});
+
+function exportOrdersCsv() {
+  const list = orderSelection.value.length ? orderSelection.value : filteredOrders.value;
+  const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const header = ['单号', '场景', '客户', '数量', '应收', '状态', '日期'];
+  const rows = list.map((o: any) =>
+    [
+      o.docNo,
+      o.orderScene === 'HQ_TO_DEALER' ? '总仓→服务商' : '服务商→机构',
+      o.buyerOrg?.name || o.clinic?.name || '',
+      (o.items || []).reduce((s: number, i: any) => s + Number(i.qty || 0), 0),
+      Number(o.totalAmount).toFixed(2),
+      statusLabel(o.status),
+      String(o.bizDate || o.createdAt || '').slice(0, 10),
+    ]
+      .map(esc)
+      .join(','),
+  );
+  const blob = new Blob([`\ufeff${header.join(',')}\n${rows.join('\n')}`], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `lumina-sales-orders-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
 const filters = [
   { label: '全部', value: 'ALL' },
   { label: '待出库', value: 'PENDING_OUTBOUND' },
@@ -583,17 +727,51 @@ const orderProgress = computed(() => {
 const totalScanned = computed(() => outScanned.value.reduce((s: number, i: any) => s + i.unitCount, 0));
 const totalRemaining = computed(() => orderProgress.value.reduce((s: number, p: any) => s + p.remaining, 0));
 
+const salesPage = ref(1);
+const salesPageSize = 20;
+const salesTotal = ref(0);
+const returnPage = ref(1);
+const returnPageSize = 20;
+const returnTotal = ref(0);
+
+function statusQueryParam() {
+  if (statusFilter.value === 'ALL') return undefined;
+  if (statusFilter.value === 'PENDING_OUTBOUND') return 'PENDING_OUTBOUND,PARTIAL_OUTBOUND';
+  return statusFilter.value;
+}
+
+async function loadSalesOrders(p = salesPage.value) {
+  salesPage.value = p;
+  const res = (await api.get('/sales-orders', {
+    params: { status: statusQueryParam(), page: p, pageSize: salesPageSize },
+  })) as any;
+  salesOrders.value = Array.isArray(res) ? res : res.items || [];
+  salesTotal.value = Array.isArray(res) ? res.length : Number(res.total || 0);
+}
+
+async function loadReturnOrders(p = returnPage.value) {
+  returnPage.value = p;
+  const res = (await api.get('/return-orders', {
+    params: { page: p, pageSize: returnPageSize },
+  })) as any;
+  returnOrders.value = Array.isArray(res) ? res : res.items || [];
+  returnTotal.value = Array.isArray(res) ? res.length : Number(res.total || 0);
+}
+
+async function onStatusFilter(val: string) {
+  statusFilter.value = val;
+  await loadSalesOrders(1);
+}
+
 async function loadAll() {
-  const [so, ro, orgs, cls, whs, prods] = await Promise.all([
-    api.get('/sales-orders'),
-    api.get('/return-orders'),
+  const [, , orgs, cls, whs, prods] = await Promise.all([
+    loadSalesOrders(salesPage.value),
+    loadReturnOrders(returnPage.value),
     api.get('/orgs'),
     api.get('/clinics'),
     api.get('/warehouses'),
     api.get('/products'),
   ]);
-  salesOrders.value = so as unknown as any[];
-  returnOrders.value = ro as unknown as any[];
   dealers.value = (orgs as unknown as any[]).filter((o) => o.type === 'DEALER');
   clinics.value = cls as unknown as any[];
   warehouses.value = whs as unknown as any[];
@@ -606,10 +784,14 @@ async function loadAll() {
 onMounted(async () => {
   await loadAll();
   window.addEventListener('keydown', hotkeys);
+  window.addEventListener('lumina:scan-activity', loadAll);
   openFromQuery();
 });
 
-onUnmounted(() => window.removeEventListener('keydown', hotkeys));
+onUnmounted(() => {
+  window.removeEventListener('keydown', hotkeys);
+  window.removeEventListener('lumina:scan-activity', loadAll);
+});
 
 watch(
   () => route.query.outbound,
@@ -736,47 +918,96 @@ function closeOutbound() {
   outScanned.value = [];
 }
 
+const inFlightOutTokens = new Set<string>();
+
+function normalizeSalesCode(raw: string): string {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  const m = s.match(/\/v\/([0-9A-Za-z]{16})(?:[/?#]|$)/i);
+  if (m) return m[1].toUpperCase();
+  return s.replace(/\s+/g, '').toUpperCase();
+}
+
+function findSalesDupReason(
+  list: any[],
+  token: string,
+  parentToken?: string | null,
+  childTokens?: string[],
+): string | null {
+  if (list.some((x) => x.token === token)) {
+    return `产品码 ${token} 已在待出库列表中，已自动去重`;
+  }
+  if (parentToken && list.some((x) => x.token === parentToken)) {
+    return `产品码 ${token} 所属外箱 ${parentToken} 已在列表中，无需重复扫描`;
+  }
+  if (list.some((x) => Array.isArray(x.childTokens) && x.childTokens.includes(token))) {
+    return `产品码 ${token} 所属外箱已在列表中，无需重复扫描`;
+  }
+  if (Array.isArray(childTokens) && childTokens.length) {
+    const hit = childTokens.find((ct) => list.some((x) => x.token === ct));
+    if (hit) {
+      return `外箱 ${token} 内的单品码 ${hit} 已在列表中，请勿箱盒混扫重复`;
+    }
+  }
+  return null;
+}
+
 async function processOutScan(raw: string) {
-  if (!raw.trim() || !activeOutboundOrder.value) return;
-  const mode = activeOutboundOrder.value.orderScene === 'HQ_TO_DEALER' ? 'HQ_OUTBOUND' : 'DEALER_OUTBOUND';
-  const res = (await api.post('/stock/scan-validate', {
-    rawInput: raw.trim(),
-    mode,
-    warehouseId: activeOutboundOrder.value.warehouseId,
-  })) as any;
+  const norm = normalizeSalesCode(raw);
+  if (!norm || !activeOutboundOrder.value) return;
+  const preDup = findSalesDupReason(outScanned.value, norm);
+  if (preDup) {
+    playScanBeep('error');
+    outLast.value = { ok: false, message: preDup };
+    ElMessage.warning(preDup);
+    return;
+  }
+  if (inFlightOutTokens.has(norm)) return;
+  inFlightOutTokens.add(norm);
+  try {
+    const mode = activeOutboundOrder.value.orderScene === 'HQ_TO_DEALER' ? 'HQ_OUTBOUND' : 'DEALER_OUTBOUND';
+    const res = (await api.post('/stock/scan-validate', {
+      rawInput: raw.trim(),
+      mode,
+      warehouseId: activeOutboundOrder.value.warehouseId,
+    })) as any;
 
-  if (!res.ok) {
-    playScanBeep('error');
-    speakWarehouseVoice(res.message);
-    outLast.value = { ok: false, message: res.message };
-    ElMessage.error(res.message);
-    return;
-  }
-  if (outScanned.value.some((x) => x.token === res.token)) {
-    playScanBeep('error');
-    outLast.value = { ok: false, message: '这个码本次已经扫过' };
-    ElMessage.warning('请勿重复扫描同一个码');
-    return;
-  }
+    if (!res.ok) {
+      playScanBeep('error');
+      speakWarehouseVoice(res.message);
+      outLast.value = { ok: false, message: res.message };
+      ElMessage.error(res.message);
+      return;
+    }
+    const postDup = findSalesDupReason(outScanned.value, res.token, res.parentToken, res.childTokens);
+    if (postDup) {
+      playScanBeep('error');
+      outLast.value = { ok: false, message: postDup };
+      ElMessage.warning(postDup);
+      return;
+    }
 
-  const line = orderProgress.value.find((p: any) => p.product.id === res.productId);
-  if (!line) {
-    playScanBeep('error');
-    outLast.value = { ok: false, message: `商品【${res.productName}】不在这张订单里` };
-    ElMessage.error(`商品【${res.productName}】不在这张订单里`);
-    return;
-  }
-  if (res.unitCount > line.remaining) {
-    playScanBeep('error');
-    outLast.value = { ok: false, message: `超出待出数量：本单还可出 ${line.remaining} 盒` };
-    ElMessage.error(`【${res.productName}】超出待出数量，本单还可出 ${line.remaining} 盒`);
-    return;
-  }
+    const line = orderProgress.value.find((p: any) => p.product.id === res.productId);
+    if (!line) {
+      playScanBeep('error');
+      outLast.value = { ok: false, message: `商品【${res.productName}】不在这张订单里` };
+      ElMessage.error(`商品【${res.productName}】不在这张订单里`);
+      return;
+    }
+    if (res.unitCount > line.remaining) {
+      playScanBeep('error');
+      outLast.value = { ok: false, message: `超出待出数量：本单还可出 ${line.remaining} 盒` };
+      ElMessage.error(`【${res.productName}】超出待出数量，本单还可出 ${line.remaining} 盒`);
+      return;
+    }
 
-  outScanned.value.unshift(res);
-  playScanBeep('success');
-  outLast.value = { ...res, ok: true };
-  outScanRef.value?.focus();
+    outScanned.value.unshift(res);
+    playScanBeep('success');
+    outLast.value = { ...res, ok: true };
+    outScanRef.value?.focus();
+  } finally {
+    inFlightOutTokens.delete(norm);
+  }
 }
 
 async function handleOutScan() {
@@ -819,6 +1050,11 @@ async function openOrderCodes(row: any) {
   } finally {
     codesLoading.value = false;
   }
+}
+
+function copySingleCode(token: string) {
+  navigator.clipboard?.writeText(token);
+  ElMessage.success(`已复制：${token}`);
 }
 
 function copyAllCodes() {
@@ -949,20 +1185,32 @@ function statusClass(s: string) {
   font-size: 13px;
   font-weight: 600;
 }
+.ellipsis-line {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .item-line {
   font-size: 12px;
   line-height: 1.6;
   display: flex;
   align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
+  gap: 5px;
+  flex-wrap: nowrap;
+  min-width: 0;
 }
 .item-name {
   color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 .item-qty {
   color: var(--ink-3);
   font-size: 11px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .gift-tag {
   font-size: 9.5px;
@@ -1010,6 +1258,54 @@ function statusClass(s: string) {
 
 .returns-card {
   margin-top: 16px;
+}
+
+.mobile-orders {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.mo-card {
+  padding: 14px;
+}
+.mo-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+.mo-buyer {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-top: 8px;
+}
+.mo-items {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.mo-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-top: 8px;
+}
+.mo-amount {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.mo-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.mo-actions :deep(.el-button + .el-button) {
+  margin-left: 0;
 }
 
 /* ============ 出库作业层 ============ */
@@ -1104,51 +1400,55 @@ function statusClass(s: string) {
 
 /* 扫描台（与入库共用视觉语言） */
 .stage {
-  background: var(--dark);
-  padding: 18px 20px 14px;
+  background: #111827;
+  padding: 20px 22px 16px;
+  position: relative;
 }
 .stage-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 12px;
-  margin-bottom: 9px;
+  margin-bottom: 10px;
 }
 .stage-title {
-  font-size: 10.5px;
+  font-size: 11px;
+  font-weight: 600;
   letter-spacing: 0.14em;
-  color: #7e9993;
+  color: #d1d5db;
 }
 .stage-sub {
-  font-size: 11px;
-  color: #5f7a74;
+  font-size: 11.5px;
+  color: #94a3b8;
 }
 .stage-input {
   width: 100%;
   height: 54px;
-  border: 1px solid var(--dark-line);
-  background: var(--dark-2);
-  border-radius: 7px;
-  padding: 0 16px;
+  border: 1px solid #334155;
+  background: rgba(15, 23, 42, 0.72);
+  border-radius: 10px;
+  padding: 0 18px;
   font-size: 17px;
   letter-spacing: 0.08em;
-  color: var(--dark-ink);
+  color: #f8fafc;
   outline: none;
+  transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
 }
 .stage-input::placeholder {
-  color: #56706b;
+  color: #64748b;
   font-size: 15px;
 }
 .stage-input:focus {
-  border-color: #3f7b71;
-  background: #142420;
+  border-color: #9ca3af;
+  background: rgba(15, 23, 42, 0.94);
+  box-shadow: none;
 }
 .stage-foot {
   display: flex;
   align-items: center;
   gap: 16px;
-  margin-top: 10px;
-  font-size: 10.5px;
-  color: #6b8580;
+  margin-top: 11px;
+  font-size: 11px;
+  color: #94a3b8;
 }
 .kbd-hint {
   display: inline-flex;
@@ -1157,16 +1457,16 @@ function statusClass(s: string) {
 }
 kbd {
   font-family: var(--font-mono);
-  font-size: 9.5px;
-  background: rgba(255, 255, 255, 0.07);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 3px;
-  padding: 1px 4px;
-  color: #a7bdb8;
+  font-size: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: #cbd5e1;
 }
 .stage-mode {
   margin-left: auto;
-  color: #7e9993;
+  color: #94a3b8;
 }
 
 .last-scan {
@@ -1214,7 +1514,7 @@ kbd {
 }
 .ls-title {
   font-size: 14px;
-  font-weight: 650;
+  font-weight: 600;
 }
 .ls-title.idle {
   font-size: 12.5px;

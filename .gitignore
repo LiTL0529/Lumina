@@ -9,3 +9,17 @@ build/
 coverage/
 apps/api/prisma/dev.db
 tmp/
+android-signing/
+backups/
+downloads/
+apps/miniapp/dist-apk/
+apps/miniapp/android/.gradle/
+apps/miniapp/android/build/
+apps/miniapp/android/app/build/
+apps/miniapp/android/app/src/main/assets/public/
+apps/miniapp/android/local.properties
+*.apk
+*.apk.idsig
+*.jks
+*.pass
+apps/miniapp/android/capacitor-cordova-android-plugins/build/
