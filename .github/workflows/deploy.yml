@@ -32,14 +32,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build API, Web Admin & Miniapp
+        run: pnpm build
+
       - name: Run unit tests
         run: |
           pnpm --filter @lumina/shared-types test
           pnpm --filter @lumina/trace-crypto test
           pnpm --filter @lumina/print-templates test
-
-      - name: Build API, Web Admin & Miniapp
-        run: pnpm build
 
   deploy:
     name: Deploy to Production Server
